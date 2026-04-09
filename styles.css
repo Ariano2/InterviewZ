@@ -1,0 +1,224 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+/* ── Base ── */
+html, body, .stApp, [data-testid="stAppViewContainer"],
+[data-testid="stAppViewBlockContainer"], [data-testid="block-container"],
+.main, .main > div {
+    background-color: #f5f6fa !important;
+    color: #1a1a2e !important;
+    font-family: 'Inter', sans-serif !important;
+}
+
+/* ── Sidebar ── */
+[data-testid="stSidebar"],
+[data-testid="stSidebar"] > div {
+    background-color: #ffffff !important;
+    border-right: 1px solid #e2e4ed !important;
+}
+[data-testid="stSidebar"] p,
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] span { color: #1a1a2e !important; }
+
+[data-testid="collapsedControl"], button[kind="header"] {
+    display: flex !important;
+    visibility: visible !important;
+    background-color: #ffffff !important;
+    border: 1px solid #e2e4ed !important;
+    border-left: none !important;
+    border-radius: 0 8px 8px 0 !important;
+    color: #4f6ef7 !important;
+    top: 14px !important;
+    z-index: 9999 !important;
+}
+[data-testid="stSidebarCollapseButton"],
+[data-testid="stSidebarCollapseButton"] > button {
+    color: #4f6ef7 !important;
+    visibility: visible !important;
+}
+
+#MainMenu, footer { visibility: hidden; }
+
+/* ── Typography ── */
+.brand {
+    font-family: 'Inter', sans-serif;
+    font-weight: 700;
+    font-size: 2.2rem;
+    letter-spacing: -1px;
+    color: #1a1a2e;
+    line-height: 1.1;
+    margin-bottom: 0;
+}
+.brand span { color: #4f6ef7; }
+
+.sub {
+    font-size: 0.85rem;
+    letter-spacing: 0.05em;
+    color: #8890a4;
+    margin-top: 4px;
+    margin-bottom: 0;
+}
+
+.section-label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #8890a4;
+    margin-bottom: 0.5rem;
+}
+
+.hr { height: 1px; background: #e2e4ed; margin: 1.2rem 0; }
+
+/* ── Cards ── */
+.card {
+    background: #ffffff;
+    border: 1px solid #e2e4ed;
+    border-radius: 12px;
+    padding: 1.2rem 1.4rem;
+    margin-bottom: 1rem;
+}
+.card-blue {
+    background: #f0f3ff;
+    border: 1px solid #c7d0fa;
+    border-radius: 12px;
+    padding: 1.2rem 1.4rem;
+    margin-bottom: 1rem;
+}
+
+/* ── Score widget ── */
+.score-wrap {
+    display: flex;
+    align-items: center;
+    gap: 1.6rem;
+    background: #ffffff;
+    border: 1px solid #e2e4ed;
+    border-radius: 12px;
+    padding: 1.4rem 1.8rem;
+    margin-bottom: 1rem;
+}
+
+/* ── Chips ── */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 0; }
+.chip {
+    padding: 3px 12px;
+    border-radius: 100px;
+    font-size: 0.78rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 500;
+}
+.chip-green { background: #e8f8ef; color: #1a7a45; border: 1px solid #a8dfc0; }
+.chip-red   { background: #fef0f0; color: #c0392b; border: 1px solid #f5b7b1; }
+.chip-blue  { background: #eef1ff; color: #3452c7; border: 1px solid #c0caff; }
+
+/* ── Chat bubbles ── */
+.bubble-user {
+    background: #4f6ef7;
+    color: #ffffff;
+    border-radius: 16px 16px 4px 16px;
+    padding: 0.8rem 1.1rem;
+    margin: 0.4rem 0 0.4rem 15%;
+    font-size: 0.93rem;
+    line-height: 1.6;
+}
+.bubble-ai {
+    background: #ffffff;
+    border: 1px solid #e2e4ed;
+    border-radius: 16px 16px 16px 4px;
+    padding: 0.8rem 1.1rem;
+    margin: 0.4rem 15% 0.4rem 0;
+    font-size: 1rem;
+    line-height: 1.6;
+    color: #1a1a2e;
+}
+
+/* ── Buttons ── */
+.stButton > button {
+    background: #4f6ef7 !important;
+    color: #ffffff !important;
+    border: none !important;
+    font-family: 'Inter', sans-serif !important;
+    font-weight: 600 !important;
+    font-size: 0.88rem !important;
+    border-radius: 8px !important;
+    padding: 0.5rem 1.4rem !important;
+    transition: background 0.15s ease !important;
+}
+.stButton > button:hover { background: #3452c7 !important; }
+
+.stDownloadButton > button {
+    background: #f0f3ff !important;
+    color: #4f6ef7 !important;
+    border: 1px solid #c7d0fa !important;
+    font-weight: 600 !important;
+    border-radius: 8px !important;
+}
+.stDownloadButton > button:hover { background: #e0e7ff !important; }
+
+/* ── Tabs ── */
+.stTabs [data-baseweb="tab-list"] {
+    background: transparent !important;
+    border-bottom: 2px solid #e2e4ed !important;
+    gap: 0 !important;
+}
+.stTabs [data-baseweb="tab"] {
+    font-family: 'Inter', sans-serif !important;
+    font-weight: 600 !important;
+    font-size: 0.88rem !important;
+    color: #8890a4 !important;
+    padding: 0.6rem 1.2rem !important;
+    border-bottom: 2px solid transparent !important;
+    margin-bottom: -2px !important;
+    background: transparent !important;
+}
+.stTabs [aria-selected="true"] {
+    color: #4f6ef7 !important;
+    border-bottom-color: #4f6ef7 !important;
+}
+
+/* ── Form controls ── */
+.stTextInput > div > div > input,
+.stTextArea > div > textarea {
+    background: #ffffff !important;
+    border: 1px solid #e2e4ed !important;
+    color: #1a1a2e !important;
+    font-family: 'Inter', sans-serif !important;
+    border-radius: 8px !important;
+    font-size: 0.93rem !important;
+}
+.stTextInput > div > div > input:focus,
+.stTextArea > div > textarea:focus {
+    border-color: #4f6ef7 !important;
+    box-shadow: 0 0 0 3px rgba(79,110,247,0.12) !important;
+}
+.stSelectbox > div > div {
+    background: #ffffff !important;
+    border: 1px solid #e2e4ed !important;
+    color: #1a1a2e !important;
+    border-radius: 8px !important;
+}
+.stTextInput label, .stSelectbox label,
+.stTextArea label, .stRadio label span {
+    color: #4a4e6a !important;
+    font-size: 0.88rem !important;
+    font-weight: 500 !important;
+}
+
+/* ── Misc ── */
+.stProgress > div > div > div { background-color: #4f6ef7 !important; }
+.stAlert { border-radius: 10px !important; font-size: 0.88rem !important; }
+.stSpinner > div { color: #4f6ef7 !important; }
+
+[data-testid="stFileUploadDropzone"] {
+    background: #f8f9ff !important;
+    border: 2px dashed #4f6ef7 !important;
+    border-radius: 12px !important;
+    color: #1a1a2e !important;
+}
+[data-testid="stFileUploadDropzone"] span,
+[data-testid="stFileUploadDropzone"] small,
+[data-testid="stFileUploadDropzone"] .uploadedFileName { color: #1a1a2e !important; }
+[data-testid="stFileUploadDropzone"] button {
+    background: #4f6ef7 !important;
+    color: white !important;
+    border: none !important;
+}

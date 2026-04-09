@@ -1,0 +1,49 @@
+# ── Secrets ───────────────────────────────────────────────────────────────────
+.env
+*.key
+*.pem
+Passwords.txt
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Virtual environments ───────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+.conda/
+
+# ── ML models (large binary files — re-downloaded on first run) ───────────────
+models/
+
+# ── Chroma vector DB (regenerated on resume upload) ───────────────────────────
+chroma_db/
+
+# ── OS junk ───────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Pip artifacts ─────────────────────────────────────────────────────────────
+=*
+
+# ── Streamlit ─────────────────────────────────────────────────────────────────
+.streamlit/secrets.toml
+
+# ── Assets ─────────────────────────────────────────────────────────────
+assets/
