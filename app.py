@@ -105,7 +105,7 @@ else:
             placeholder="gsk_...   (get free at console.groq.com)",
         ).strip()
     with col_status:
-        st.markdown("<br>", unsafe_allow_html=True)
+        st.write("")
         if active_key:
             st.success("Connected", icon="✅")
         else:
@@ -227,35 +227,32 @@ with tab_ats:
 
             bg = "#e8f8ef" if score >= 70 else "#fef3e8" if score >= 45 else "#fef0f0"
 
-            # ── Main score gauge ───────────────────────────────────────────────
-            jd_tag = (
-                '<span style="font-size:0.75rem;font-weight:600;background:#eef0f7;'
-                'color:#4f6ef7;padding:2px 8px;border-radius:100px;margin-left:6px;">JD-matched</span>'
-                if r.get("used_jd") else ""
-            )
-            st.markdown(f"""
-<div class="score-wrap">
-  <div style="width:90px;height:90px;border-radius:50%;flex-shrink:0;
-              background:conic-gradient({color} {score}%,#eef0f7 0);
-              display:flex;align-items:center;justify-content:center;">
-    <div style="width:68px;height:68px;border-radius:50%;background:#fff;
-                display:flex;align-items:center;justify-content:center;
-                font-size:1.35rem;font-weight:700;color:{color};">{score}</div>
-  </div>
-  <div>
-    <div style="font-size:1.05rem;font-weight:700;color:#1a1a2e;">
-      ATS Score &nbsp;
-      <span style="font-size:0.8rem;font-weight:600;background:{bg};
-                   color:{color};padding:2px 10px;border-radius:100px;">{band}</span>
-      {jd_tag}
-    </div>
-  </div>
-</div>
-""", unsafe_allow_html=True)
-            # Summary rendered separately so LLM unicode never breaks the gauge HTML
-            st.markdown(f'<p style="font-size:0.92rem;color:#4a4e6a;line-height:1.65;margin-top:0.4rem;">{r["summary"]}</p>', unsafe_allow_html=True)
+            # ── Main score gauge — split into columns to avoid HTML parser issues ──
+            g_col, t_col = st.columns([1, 5])
+            with g_col:
+                st.markdown(
+                    f'<div style="width:90px;height:90px;border-radius:50%;'
+                    f'background:conic-gradient({color} {score}%,#eef0f7 0);'
+                    f'display:flex;align-items:center;justify-content:center;">'
+                    f'<div style="width:68px;height:68px;border-radius:50%;background:#fff;'
+                    f'display:flex;align-items:center;justify-content:center;'
+                    f'font-size:1.35rem;font-weight:700;color:{color};">{score}</div></div>',
+                    unsafe_allow_html=True,
+                )
+            with t_col:
+                jd_badge = " · JD-matched" if r.get("used_jd") else ""
+                st.markdown(
+                    f'<div style="padding-top:0.6rem;font-size:1.05rem;font-weight:700;color:#1a1a2e;">'
+                    f'ATS Score'
+                    f'<span style="font-size:0.8rem;font-weight:600;background:{bg};color:{color};'
+                    f'padding:2px 10px;border-radius:100px;margin-left:8px;">{band}{jd_badge}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+                # Summary in its own call — LLM text never touches the badge HTML
+                st.caption(r["summary"])
             st.progress(score / 100)
-            st.markdown("<br>", unsafe_allow_html=True)
+            st.write("")
 
             # ── Sub-score breakdown ────────────────────────────────────────────
             st.markdown('<div class="section-label" style="margin-bottom:0.6rem;">Score Breakdown</div>', unsafe_allow_html=True)
@@ -315,11 +312,10 @@ with tab_ats:
                         unsafe_allow_html=True,
                     )
 
-            st.markdown("<br>", unsafe_allow_html=True)
+            st.write("")
 
             # ── Keywords ───────────────────────────────────────────────────────
             col_matched, col_missing = st.columns(2)
-            kw_pct = r.get("keyword_match_pct", 0)
             with col_matched:
                 st.markdown(
                     f'<div class="card"><div class="section-label">✅ Matched Keywords '
@@ -417,7 +413,7 @@ with tab_bullets:
                 mime="application/pdf",
                 use_container_width=True,
             )
-            st.markdown("<br>", unsafe_allow_html=True)
+            st.write("")
 
         # ── Before / After cards ──────────────────────────────────────────────
         pairs = st.session_state.bullets_result
@@ -442,36 +438,24 @@ with tab_bullets:
                 why      = (p.get("why")      or "").strip()
                 if not original:
                     continue
-                st.markdown(f"""
-<div class="card" style="font-size:0.92rem;line-height:1.75;">
-  <span class="section-label" style="color:#c0392b;">ORIGINAL</span><br>
-  <span style="color:#4a4e6a;">{original}</span>
-  <br><br>
-  <span class="section-label" style="color:#27ae60;">IMPROVED</span><br>
-  <span style="color:#1a4a2e;font-weight:500;">{improved}</span>
-  <br><br>
-  <span class="section-label" style="color:#e67e22;">WHY BETTER</span><br>
-  <span style="color:#4a4e6a;font-size:0.88rem;">{why}</span>
-</div>
-""", unsafe_allow_html=True)
+                with st.container(border=True):
+                    st.markdown("**ORIGINAL**")
+                    st.write(original)
+                    st.markdown("**IMPROVED**")
+                    st.write(improved)
+                    st.markdown("**WHY BETTER**")
+                    st.caption(why)
 
             if removals:
-                st.markdown(
-                    '<div class="section-label" style="margin:1rem 0 0.5rem;color:#c0392b;">'
-                    'Removed (redundant / zero-value)</div>',
-                    unsafe_allow_html=True,
-                )
+                st.markdown("**Removed — redundant / zero-value**")
             for p in removals:
                 original = (p.get("original") or "").strip()
                 why      = (p.get("why")      or "").strip()
                 if not original:
                     continue
-                st.markdown(f"""
-<div class="card" style="font-size:0.92rem;line-height:1.75;border-left:3px solid #c0392b;">
-  <span style="color:#c0392b;text-decoration:line-through;">{original}</span><br>
-  <span style="color:#8890a4;font-size:0.85rem;">&#x2715; {why}</span>
-</div>
-""", unsafe_allow_html=True)
+                with st.container(border=True):
+                    st.write(f"~~{original}~~")
+                    st.caption(f"Removed: {why}")
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # TAB 3 — RAG Chat

@@ -84,45 +84,47 @@ _FALLBACK: ATSResult = {
 
 # ── Programmatic checks ───────────────────────────────────────────────────────
 
+# Common abbreviation pairs (full form → short form, both directions checked)
+_ABBREV = {
+    "machine learning": "ml",
+    "artificial intelligence": "ai",
+    "natural language processing": "nlp",
+    "large language model": "llm",
+    "retrieval augmented generation": "rag",
+    "continuous integration": "ci",
+    "continuous deployment": "cd",
+    "object oriented programming": "oop",
+    "application programming interface": "api",
+    "user interface": "ui",
+    "user experience": "ux",
+    "sql": "structured query language",
+}
+
+
+def _word_present(word: str, text: str) -> bool:
+    """True if `word` appears as a whole token in `text` (word-boundary aware)."""
+    pattern = r"(?<![a-z0-9])" + re.escape(word) + r"(?![a-z0-9])"
+    return bool(re.search(pattern, text))
+
+
 def _check_keywords(resume_text: str, keywords: list) -> tuple:
     """
     Check each keyword against resume text (case-insensitive).
     Also catches common abbreviations: 'machine learning' ↔ 'ML', etc.
     Returns (matched, missing, pct).
     """
-    ABBREV = {
-        "machine learning": "ml",
-        "artificial intelligence": "ai",
-        "natural language processing": "nlp",
-        "large language model": "llm",
-        "retrieval augmented generation": "rag",
-        "continuous integration": "ci",
-        "continuous deployment": "cd",
-        "object oriented programming": "oop",
-        "application programming interface": "api",
-        "user interface": "ui",
-        "user experience": "ux",
-        "sql": "structured query language",
-    }
     text_lower = resume_text.lower()
     matched, missing = [], []
-
-    def _word_present(word: str, text: str) -> bool:
-        """True if `word` appears as a whole token in `text` (word-boundary aware)."""
-        # Use regex word boundary; escape special regex chars in keyword
-        pattern = r"(?<![a-z0-9])" + re.escape(word) + r"(?![a-z0-9])"
-        return bool(re.search(pattern, text))
 
     for kw in keywords:
         kw_lower = kw.lower().strip()
         found = _word_present(kw_lower, text_lower)
         if not found:
-            # Try abbreviation lookup in both directions
-            abbrev = ABBREV.get(kw_lower)
+            abbrev = _ABBREV.get(kw_lower)
             if abbrev and _word_present(abbrev, text_lower):
                 found = True
             else:
-                for full, short in ABBREV.items():
+                for full, short in _ABBREV.items():
                     if kw_lower == short and _word_present(full, text_lower):
                         found = True
                         break

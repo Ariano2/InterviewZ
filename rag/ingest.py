@@ -2,120 +2,83 @@
 rag/ingest.py
 Chunks resume text, embeds with sentence-transformers, persists to Chroma.
 """
-import warnings
-warnings.filterwarnings("ignore")
-
-import os
-# ── Environment setup to prevent repeated downloads ──
-os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-os.environ["HF_HOME"] = os.path.join(os.path.expanduser("~"), ".cache", "huggingface")
-
-# Suppress ALL logs and warnings from transformers and sentence-transformers
+import contextlib
+import io
 import logging
-logging.getLogger("transformers").setLevel(logging.ERROR)
-logging.getLogger("transformers.modeling_utils").setLevel(logging.ERROR)  # fixes BertModel LOAD REPORT
-logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
-logging.getLogger("huggingface").setLevel(logging.ERROR)
-logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+import os
+import warnings
 
-# Use transformers' own internal verbosity API — most reliable suppression
+# Suppress noisy HF / transformer logs before any heavy imports
+warnings.filterwarnings("ignore")
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+os.environ.setdefault("TQDM_DISABLE", "1")
+
+for _logger in ("transformers", "sentence_transformers", "huggingface_hub"):
+    logging.getLogger(_logger).setLevel(logging.ERROR)
+
 import transformers
 transformers.logging.set_verbosity_error()
 
-# Suppress tqdm progress bars
-from tqdm import tqdm
-from functools import partialmethod
-tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)
-
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_huggingface import HuggingFaceEmbeddings
+import chromadb
 from langchain_chroma import Chroma
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-# Persistent directory for Chroma
 CHROMA_PERSIST_DIR = "./chroma_db"
+EMBED_MODEL_NAME   = "sentence-transformers/all-MiniLM-L6-v2"
+COLLECTION_NAME    = "resume_chunks"
 
-# Small, fast, completely local embedding model
-EMBED_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
-# Shared collection name
-COLLECTION_NAME = "resume_chunks"
+@contextlib.contextmanager
+def _quiet():
+    """Redirect stdout/stderr to /dev/null — catches any print-based chatter."""
+    with open(os.devnull, "w") as sink:
+        with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
+            yield
 
 
 def _get_embeddings() -> HuggingFaceEmbeddings:
-    """Return a cached HuggingFaceEmbeddings instance with all warnings suppressed."""
-    import sys
-
-    # Re-apply transformers verbosity here in case it was reset during import
-    transformers.logging.set_verbosity_error()
-    logging.getLogger("transformers.modeling_utils").setLevel(logging.ERROR)
-
-    # Redirect both stdout and stderr to devnull to catch any print-based messages
-    from contextlib import contextmanager
-
-    @contextmanager
-    def suppress_output():
-        with open(os.devnull, "w") as devnull:
-            old_stdout = sys.stdout
-            old_stderr = sys.stderr
-            sys.stdout = devnull
-            sys.stderr = devnull
-            try:
-                yield
-            finally:
-                sys.stdout = old_stdout
-                sys.stderr = old_stderr
-
-    with suppress_output():
-        embeddings = HuggingFaceEmbeddings(
+    with _quiet():
+        return HuggingFaceEmbeddings(
             model_name=EMBED_MODEL_NAME,
             model_kwargs={"device": "cpu"},
             encode_kwargs={"normalize_embeddings": True},
         )
-    return embeddings
 
 
 def ingest_resume(text: str) -> Chroma:
-    """
-    Split → embed → upsert into Chroma.
-    Returns the Chroma vectorstore instance.
-    """
-    splitter = RecursiveCharacterTextSplitter(
+    """Split → embed → upsert into Chroma. Returns the vectorstore."""
+    chunks = RecursiveCharacterTextSplitter(
         chunk_size=500,
         chunk_overlap=80,
         separators=["\n\n", "\n", ". ", " ", ""],
-    )
-    chunks = splitter.split_text(text)
+    ).split_text(text)
 
     if not chunks:
-        raise ValueError("Resume text appears empty after splitting. Check the file.")
+        raise ValueError("Resume text is empty after splitting. Check the uploaded file.")
 
-    metadatas = [{"source": "resume", "chunk_index": i} for i in range(len(chunks))]
+    metadatas  = [{"source": "resume", "chunk_index": i} for i in range(len(chunks))]
     embeddings = _get_embeddings()
 
-    # Delete existing collection to avoid stale data
-    import chromadb
+    # Drop stale collection so re-uploads don't mix data
     client = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
-    try:
+    with contextlib.suppress(Exception):
         client.delete_collection(COLLECTION_NAME)
-    except Exception:
-        pass  # collection didn't exist yet
 
-    vectorstore = Chroma.from_texts(
+    return Chroma.from_texts(
         texts=chunks,
         embedding=embeddings,
         metadatas=metadatas,
         persist_directory=CHROMA_PERSIST_DIR,
         collection_name=COLLECTION_NAME,
     )
-    return vectorstore
 
 
 def load_vectorstore() -> Chroma:
     """Load the persisted Chroma collection for querying."""
-    embeddings = _get_embeddings()
     return Chroma(
         persist_directory=CHROMA_PERSIST_DIR,
-        embedding_function=embeddings,
+        embedding_function=_get_embeddings(),
         collection_name=COLLECTION_NAME,
     )
