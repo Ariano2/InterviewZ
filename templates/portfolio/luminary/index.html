@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{FULL_NAME}} — Portfolio</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+</head>
+<body>
+
+<!-- ── Navbar ─────────────────────────────────────────────────────────────── -->
+<nav class="navbar" id="navbar">
+  <div class="nav-inner">
+    <a href="#hero" class="nav-logo">{{INITIALS}}</a>
+    <ul class="nav-links">
+      <li><a href="#about">About</a></li>
+      <li><a href="#skills">Skills</a></li>
+      <li><a href="#projects">Projects</a></li>
+      <li><a href="#experience">Experience</a></li>
+      <li><a href="#education">Education</a></li>
+      <li><a href="#contact" class="nav-cta">Contact</a></li>
+    </ul>
+    <button class="hamburger" id="hamburger" aria-label="Menu">
+      <span></span><span></span><span></span>
+    </button>
+  </div>
+</nav>
+
+<!-- Mobile menu -->
+<div class="mobile-menu" id="mobileMenu">
+  <ul>
+    <li><a href="#about">About</a></li>
+    <li><a href="#skills">Skills</a></li>
+    <li><a href="#projects">Projects</a></li>
+    <li><a href="#experience">Experience</a></li>
+    <li><a href="#education">Education</a></li>
+    <li><a href="#contact">Contact</a></li>
+  </ul>
+</div>
+
+<!-- ── Hero ───────────────────────────────────────────────────────────────── -->
+<section class="hero" id="hero">
+  <div class="hero-bg-grid"></div>
+  <div class="hero-content reveal">
+    <p class="hero-greeting">Hi, I'm</p>
+    <h1 class="hero-name">{{FULL_NAME}}</h1>
+    <h2 class="hero-tagline">{{TAGLINE}}</h2>
+    <p class="hero-typing">
+      <span id="typingText"></span><span class="cursor">|</span>
+    </p>
+    <div class="hero-cta">
+      <a href="#projects" class="btn btn-primary">View My Work</a>
+      <a href="#contact" class="btn btn-outline">Get In Touch</a>
+    </div>
+    <div class="hero-scroll">
+      <span>Scroll down</span>
+      <div class="scroll-line"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Stats ──────────────────────────────────────────────────────────────── -->
+<section class="stats-bar">
+  {{STATS_HTML}}
+</section>
+
+<!-- ── About ──────────────────────────────────────────────────────────────── -->
+<section class="section" id="about">
+  <div class="container">
+    <div class="section-header reveal">
+      <span class="section-tag">About</span>
+      <h2 class="section-title">Who I Am</h2>
+    </div>
+    <div class="about-grid reveal">
+      <div class="about-text">
+        <p>{{ABOUT_PARAGRAPH}}</p>
+        <div class="about-links">
+          <a href="{{GITHUB_URL}}" target="_blank" class="about-link">GitHub →</a>
+          <a href="{{LINKEDIN_URL}}" target="_blank" class="about-link">LinkedIn →</a>
+        </div>
+      </div>
+      <div class="about-card">
+        <div class="about-avatar">{{INITIALS}}</div>
+        <p class="about-name">{{FULL_NAME}}</p>
+        <p class="about-role" id="aboutRole"></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Skills ─────────────────────────────────────────────────────────────── -->
+<section class="section section-alt" id="skills">
+  <div class="container">
+    <div class="section-header reveal">
+      <span class="section-tag">Skills</span>
+      <h2 class="section-title">What I Work With</h2>
+    </div>
+    <div class="reveal">
+      {{SKILLS_HTML}}
+    </div>
+  </div>
+</section>
+
+<!-- ── Projects ───────────────────────────────────────────────────────────── -->
+<section class="section" id="projects">
+  <div class="container">
+    <div class="section-header reveal">
+      <span class="section-tag">Projects</span>
+      <h2 class="section-title">Things I've Built</h2>
+    </div>
+    <div class="projects-grid">
+      {{PROJECTS_HTML}}
+    </div>
+  </div>
+</section>
+
+<!-- ── Experience ─────────────────────────────────────────────────────────── -->
+<section class="section section-alt" id="experience">
+  <div class="container">
+    <div class="section-header reveal">
+      <span class="section-tag">Experience</span>
+      <h2 class="section-title">Where I've Worked</h2>
+    </div>
+    <div class="timeline">
+      {{EXPERIENCE_HTML}}
+    </div>
+  </div>
+</section>
+
+<!-- ── Education ──────────────────────────────────────────────────────────── -->
+<section class="section" id="education">
+  <div class="container">
+    <div class="section-header reveal">
+      <span class="section-tag">Education</span>
+      <h2 class="section-title">Academic Background</h2>
+    </div>
+    <div class="edu-grid reveal">
+      {{EDUCATION_HTML}}
+    </div>
+  </div>
+</section>
+
+<!-- ── Contact ────────────────────────────────────────────────────────────── -->
+<section class="section section-alt" id="contact">
+  <div class="container">
+    <div class="section-header reveal">
+      <span class="section-tag">Contact</span>
+      <h2 class="section-title">Let's Connect</h2>
+    </div>
+    <div class="contact-box reveal">
+      <p class="contact-sub">Open to opportunities, collaborations, and interesting conversations.</p>
+      <div class="contact-links">
+        {{CONTACT_HTML}}
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Footer ─────────────────────────────────────────────────────────────── -->
+<footer class="footer">
+  <p>© {{NAV_YEAR}} {{FULL_NAME}} · Built with <a href="https://github.com" target="_blank">PrepSense AI</a></p>
+</footer>
+
+<script src="script.js"></script>
+{{DUMMY_BANNER_SCRIPT}}
+</body>
+</html>

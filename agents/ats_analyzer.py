@@ -243,12 +243,16 @@ Return ONLY the JSON object."""
         model=GROQ_MODEL,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.15,
-        max_tokens=1500,
+        max_tokens=4000,
     )
-    raw = response.choices[0].message.content.strip()
-    raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.MULTILINE)
-    raw = re.sub(r"\s*```$", "", raw, flags=re.MULTILINE)
-    return json.loads(raw.strip())
+    content = response.choices[0].message.content
+    if not content or not content.strip():
+        raise ValueError("Model returned empty response")
+    raw = re.sub(r"```(?:json)?\s*", "", content, flags=re.IGNORECASE).strip()
+    m = re.search(r"\{[\s\S]*\}", raw)
+    if not m:
+        raise ValueError(f"No JSON object found in response: {raw[:200]}")
+    return json.loads(m.group(0))
 
 
 # ── Public API ────────────────────────────────────────────────────────────────

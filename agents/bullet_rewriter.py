@@ -79,7 +79,7 @@ Only include bullets you are removing or rewriting. Return ONLY the JSON array."
             model=GROQ_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.55,
-            max_tokens=2800,
+            max_tokens=5000,
             top_p=0.9,
         )
         raw = response.choices[0].message.content.strip()

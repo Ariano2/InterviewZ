@@ -26,3 +26,9 @@ python-dotenv>=1.0.0
 
 # PDF resume generation
 reportlab>=4.0.0
+
+# Charts
+plotly>=5.0.0
+
+# HTTP (GitHub OAuth + JSearch API)
+requests>=2.31.0
