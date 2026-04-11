@@ -7,7 +7,7 @@ The model autonomously decides when to call search_jobs based on user intent.
 import json
 import re
 from groq import Groq
-from rag.retriever import retrieve_context
+from rag.retriever import retrieve_with_scores
 from agents.job_search import search_jobs, format_jobs_for_llm
 
 GROQ_MODEL = "openai/gpt-oss-120b"
@@ -89,15 +89,18 @@ def chat_with_resume(
     target_role: str = "",
     session_summary: str = "",
     rapidapi_key: str = "",
+    vectorstore=None,
 ) -> tuple[str, str]:
     """
     RAG-grounded, agentic chat with optional live job search.
     Uses Groq tool calling — the model decides autonomously when to search.
 
-    Returns (assistant_reply, updated_session_summary).
+    Returns (assistant_reply, updated_session_summary, retrieved_chunks).
+    retrieved_chunks is a list[dict] — each has "text", "chunk_index", "dense_score", "bm25_score", "hybrid_score".
     """
-    # 1. Retrieve relevant resume chunks
-    context = retrieve_context(user_message, k=6)
+    # 1. Retrieve relevant resume chunks — hybrid BM25 + dense, cached vectorstore
+    retrieved_chunks = retrieve_with_scores(user_message, k=4, vectorstore=vectorstore)
+    context = "\n\n---\n\n".join(c["text"] for c in retrieved_chunks) if retrieved_chunks else ""
     context_block = (
         context if context
         else "No resume indexed yet. Ask the user to upload their resume first."
@@ -136,7 +139,8 @@ FORMATTING RULES - follow exactly:
 
 CONTENT RULES:
 - Never repeat or rephrase the user's question. Start directly with value.
-- Always tie advice to resume context when possible.
+- When describing the user's projects, experience, or skills: ONLY state what is explicitly written in the resume context above. Do NOT invent metrics, tools, frameworks, test setups, CI pipelines, user counts, percentages, or any detail not present in the context. If something is not in the context, say "your resume doesn't mention this" rather than guessing.
+- For general career advice questions (not about the resume itself), you may draw on general knowledge but clearly separate it from resume facts.
 - Keep answers 200-500 words unless a deep dive is asked.
 - End with 1-2 natural follow-up questions.
 
@@ -161,7 +165,7 @@ NEVER use filler openers like "Great question!", "Sure!", "Absolutely!". Just de
         session_summary, chat_history, reply, groq_client
     )
 
-    return reply, updated_summary
+    return reply, updated_summary, retrieved_chunks
 
 
 # ─────────────────────────────────────────────────────────────────────────────

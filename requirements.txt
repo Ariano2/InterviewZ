@@ -32,3 +32,12 @@ plotly>=5.0.0
 
 # HTTP (GitHub OAuth + JSearch API)
 requests>=2.31.0
+
+# KeyBERT — BERT-based keyword extraction
+keybert>=0.8.0
+
+# PCA embedding visualization
+scikit-learn>=1.3.0
+
+# BM25 sparse retrieval (hybrid RAG)
+rank-bm25>=0.2.2

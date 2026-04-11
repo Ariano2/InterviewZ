@@ -1,9 +1,11 @@
 """
 rag/ingest.py
 Chunks resume text, embeds with sentence-transformers, persists to Chroma.
+Also saves a plain-text BM25 corpus (JSON) alongside Chroma for hybrid retrieval.
 """
 import contextlib
 import io
+import json
 import logging
 import os
 import warnings
@@ -26,8 +28,9 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 CHROMA_PERSIST_DIR = "./chroma_db"
-EMBED_MODEL_NAME   = "sentence-transformers/all-MiniLM-L6-v2"
+EMBED_MODEL_NAME   = "BAAI/bge-small-en-v1.5"
 COLLECTION_NAME    = "resume_chunks"
+BM25_CORPUS_PATH   = "./chroma_db/bm25_corpus.json"
 
 
 @contextlib.contextmanager
@@ -50,8 +53,8 @@ def _get_embeddings() -> HuggingFaceEmbeddings:
 def ingest_resume(text: str) -> Chroma:
     """Split → embed → upsert into Chroma. Returns the vectorstore."""
     chunks = RecursiveCharacterTextSplitter(
-        chunk_size=500,
-        chunk_overlap=80,
+        chunk_size=700,
+        chunk_overlap=50,
         separators=["\n\n", "\n", ". ", " ", ""],
     ).split_text(text)
 
@@ -66,13 +69,20 @@ def ingest_resume(text: str) -> Chroma:
     with contextlib.suppress(Exception):
         client.delete_collection(COLLECTION_NAME)
 
-    return Chroma.from_texts(
+    vs = Chroma.from_texts(
         texts=chunks,
         embedding=embeddings,
         metadatas=metadatas,
         persist_directory=CHROMA_PERSIST_DIR,
         collection_name=COLLECTION_NAME,
     )
+
+    # Persist BM25 corpus — plain text list for lexical retrieval
+    corpus = [{"text": c, "chunk_index": i} for i, c in enumerate(chunks)]
+    with open(BM25_CORPUS_PATH, "w", encoding="utf-8") as f:
+        json.dump(corpus, f, ensure_ascii=False)
+
+    return vs
 
 
 def load_vectorstore() -> Chroma:

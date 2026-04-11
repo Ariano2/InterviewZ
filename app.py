@@ -69,6 +69,17 @@ _DEFAULTS = {
     "upskill_recommended": None,     # List[Dict] from recommend_skills
     "upskill_plan": None,            # Dict from generate_learning_plan
     "upskill_selected_skill": "",    # skill currently showing a plan for
+    # RAG chunks (loaded once on upload)
+    "resume_chunks": [],             # List[Dict] — {chunk_index, text} from vectorstore
+    # PCA embedding visualization (computed once on upload)
+    "pca_coords": [],                # List[Dict] — {chunk_index, x, y, text}
+    "pca_variance": [0.0, 0.0],     # Explained variance ratio for PC1, PC2
+    # Cached vectorstore — reused across all queries, reset only on new upload
+    "vectorstore": None,
+    # Indices + scores of chunks retrieved in the last chat query (for sidebar highlight)
+    "last_retrieved": [],            # List[Dict] — {chunk_index, dense, bm25, hybrid}
+    # Groq key tracking — only recreate client when key actually changes
+    "_active_groq_key": "",
 }
 for k, v in _DEFAULTS.items():
     st.session_state.setdefault(k, v)
@@ -109,6 +120,66 @@ with st.sidebar:
         preview = summary[:200] + ("…" if len(summary) > 200 else "")
         st.markdown(f'<p style="font-size:0.78rem;color:#8890a4;line-height:1.5;">{preview}</p>', unsafe_allow_html=True)
 
+    _chunks = st.session_state.resume_chunks
+    if _chunks:
+        st.divider()
+        st.markdown('<p class="section-label">📄 Resume Chunks</p>', unsafe_allow_html=True)
+
+        # Build a lookup from last retrieved indices → scores for highlighting
+        _retrieved_map: dict[int, dict] = {
+            r["chunk_index"]: r
+            for r in st.session_state.last_retrieved
+        }
+        _n_retrieved = len(_retrieved_map)
+        if _n_retrieved:
+            st.caption(f"🔍 {_n_retrieved} chunk{'s' if _n_retrieved > 1 else ''} used in last query")
+
+        with st.expander(f"View all {len(_chunks)} indexed chunks", expanded=False):
+            st.caption(f"{len(_chunks)} chunks · BGE-small + BM25 hybrid index")
+            for _c in sorted(_chunks, key=lambda x: x["chunk_index"]):
+                _idx  = _c["chunk_index"]
+                _hit  = _retrieved_map.get(_idx)
+                _border_color = "#27ae60" if _hit else "#e0e4f0"
+                _label_color  = "#27ae60" if _hit else "#3452c7"
+                _badge        = " ✦ retrieved" if _hit else ""
+
+                st.markdown(
+                    f'<p style="font-size:0.72rem;font-weight:600;color:{_label_color};margin:4px 0 2px;">'
+                    f'Chunk #{_idx}{_badge}</p>',
+                    unsafe_allow_html=True,
+                )
+                st.markdown(
+                    f'<p style="font-size:0.72rem;color:#555;line-height:1.5;margin:0 0 4px;'
+                    f'border-left:3px solid {_border_color};padding-left:8px;">'
+                    f'{_c["text"][:280]}{"…" if len(_c["text"]) > 280 else ""}</p>',
+                    unsafe_allow_html=True,
+                )
+
+                # Score bars — only for retrieved chunks
+                if _hit:
+                    _d = _hit["dense_score"]
+                    _b = _hit["bm25_score"]
+                    _h = _hit["hybrid_score"]
+                    st.markdown(
+                        f'<div style="font-size:0.68rem;color:#555;margin:0 0 2px 10px;line-height:1.8;">'
+                        f'<span style="color:#3452c7;">■</span> Dense&nbsp;<b>{_d:.2f}</b>&nbsp;&nbsp;'
+                        f'<span style="color:#e67e22;">■</span> BM25&nbsp;<b>{_b:.2f}</b>&nbsp;&nbsp;'
+                        f'<span style="color:#27ae60;">■</span> Hybrid&nbsp;<b>{_h:.2f}</b>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+                    # Mini score bar
+                    st.markdown(
+                        f'<div style="display:flex;gap:3px;margin:0 0 10px 10px;height:5px;">'
+                        f'<div style="width:{int(_d*80)}px;background:#3452c7;border-radius:2px;"></div>'
+                        f'<div style="width:{int(_b*80)}px;background:#e67e22;border-radius:2px;"></div>'
+                        f'<div style="width:{int(_h*80)}px;background:#27ae60;border-radius:2px;"></div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown('<div style="margin-bottom:8px;"></div>', unsafe_allow_html=True)
+
 # ── Header ────────────────────────────────────────────────────────────────────────
 st.markdown('<h1 class="brand">Prep<span>Sense</span> AI</h1>', unsafe_allow_html=True)
 st.markdown('<p class="sub">ATS Scorer · Bullet Rewriter · RAG Chat · Powered by Groq</p>', unsafe_allow_html=True)
@@ -137,7 +208,9 @@ else:
         else:
             st.warning("Required", icon="🔑")
 
-st.session_state.groq_client = Groq(api_key=active_key) if active_key else None
+if active_key != st.session_state._active_groq_key:
+    st.session_state.groq_client   = Groq(api_key=active_key) if active_key else None
+    st.session_state._active_groq_key = active_key
 st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
 
 # ── File Upload ───────────────────────────────────────────────────────────────────
@@ -181,6 +254,11 @@ if uploaded_file and uploaded_file.name != st.session_state.loaded_filename:
         "tailored_pdf_bytes": None,
         "skill_gap_result": None,
         "resume_indexed": False,
+        "resume_chunks": [],
+        "pca_coords": [],
+        "pca_variance": [0.0, 0.0],
+        "vectorstore": None,
+        "last_retrieved": [],
         "chat_history": [],
         "session_summary": "",
         "interview_qna": None,
@@ -197,7 +275,65 @@ if uploaded_file and uploaded_file.name != st.session_state.loaded_filename:
             st.error(f"RAG indexing failed: {e}")
 
     if st.session_state.resume_indexed:
+        # ── Step 1: load vectorstore ONCE, cache in session state ──────────────
+        try:
+            from rag.ingest import load_vectorstore
+            _vs = load_vectorstore()
+            st.session_state.vectorstore = _vs   # cached — reused for all queries
+
+            # Fetch docs + metas via LangChain wrapper
+            _result = _vs.get()
+            _docs   = _result.get("documents") or []
+            _metas  = _result.get("metadatas") or []
+
+            # Try to pull pre-computed embeddings directly from the underlying
+            # chromadb collection (bypasses LangChain wrapper limitations)
+            try:
+                _raw    = _vs._collection.get(include=["embeddings"])
+                _embeds = _raw.get("embeddings") or []
+            except Exception:
+                _embeds = []
+
+            st.session_state.resume_chunks = [
+                {"chunk_index": (_metas[i] or {}).get("chunk_index", i), "text": _docs[i]}
+                for i in range(len(_docs))
+            ]
+        except Exception as _e:
+            st.warning(f"Could not load chunks for sidebar: {_e}")
+            _docs, _metas, _embeds = [], [], []
+
+        # ── Step 2: PCA — use stored Chroma embeddings, fall back to re-encoding ─
+        if len(_docs) >= 2:
+            try:
+                import numpy as np
+                from sklearn.decomposition import PCA
+
+                if len(_embeds) >= 2:
+                    # Fast path: use vectors already stored in Chroma — no re-encoding
+                    _arr = np.array(_embeds, dtype=float)
+                else:
+                    # Fallback: re-encode using the shared BGE model instance
+                    # (already loaded by ats_analyzer — no extra download)
+                    from agents.ats_analyzer import _get_embed_model
+                    _arr = _get_embed_model().encode(_docs, normalize_embeddings=True)
+
+                _pca = PCA(n_components=2)
+                _xy  = _pca.fit_transform(_arr)
+                st.session_state.pca_coords = [
+                    {
+                        "chunk_index": (_metas[i] or {}).get("chunk_index", i),
+                        "x":    float(_xy[i, 0]),
+                        "y":    float(_xy[i, 1]),
+                        "text": _docs[i][:120],
+                    }
+                    for i in range(len(_docs))
+                ]
+                st.session_state.pca_variance = _pca.explained_variance_ratio_.tolist()
+            except Exception as _e:
+                st.warning(f"PCA computation failed: {_e}")
+
         st.success(f"✓ **{uploaded_file.name}** parsed & indexed", icon="🗂️")
+        st.rerun()
 
 st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
 
@@ -295,6 +431,43 @@ with tab_ats:
                 # Summary in its own call — LLM text never touches the badge HTML
                 st.caption(r["summary"])
             st.progress(score / 100)
+
+            # ── Embedding similarity metrics (model-computed, zero LLM) ────────
+            sim_metrics = r.get("similarity_metrics", {})
+            if sim_metrics and sim_metrics.get("cosine", -1.0) >= 0:
+                st.markdown(
+                    '<div class="section-label" style="margin:0.7rem 0 0.4rem;">'
+                    '🤖 Embedding Similarity Metrics'
+                    '<span style="font-size:0.72rem;font-weight:400;color:#aab0c4;margin-left:8px;">'
+                    'BAAI/bge-small-en-v1.5 · no LLM involved</span></div>',
+                    unsafe_allow_html=True,
+                )
+
+                _metric_defs = [
+                    ("Cosine",     "cos(θ) = A·B — angle between vectors; magnitude-independent.",               sim_metrics.get("cosine",    0.0)),
+                    ("Euclidean",  "1 − d/2 where d=‖A−B‖₂.  Distance in embedding space → similarity.",        sim_metrics.get("euclidean", 0.0)),
+                    ("Manhattan",  "L1 norm similarity.  Less dominated by large individual dimensions than L2.", sim_metrics.get("manhattan", 0.0)),
+                    ("Pearson",    "Mean-centred cosine — corr(A−Ā, B−B̄).  Co-variance of embedding dims.",     sim_metrics.get("pearson",   0.0)),
+                ]
+
+                sim_cols = st.columns(4)
+                for col, (label, tooltip, val) in zip(sim_cols, _metric_defs):
+                    if val >= 0.60:
+                        c = "#27ae60"
+                    elif val >= 0.40:
+                        c = "#e67e22"
+                    else:
+                        c = "#e74c3c"
+                    col.markdown(
+                        f'<div style="padding:12px 14px;border-radius:10px;background:#f8f9fc;'
+                        f'border:1px solid #e0e4f0;text-align:center;">'
+                        f'<div style="font-size:0.75rem;color:#8890a4;font-weight:500;margin-bottom:4px;">{label}</div>'
+                        f'<div style="font-size:1.4rem;font-weight:800;color:{c};">{val:.3f}</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+                    col.caption(tooltip)
+
             st.write("")
 
             # ── Sub-score breakdown ────────────────────────────────────────────
@@ -384,6 +557,46 @@ with tab_ats:
                 else:
                     st.markdown('<p style="font-size:0.88rem;color:#27ae60;font-weight:500;">Full coverage — none missing!</p>', unsafe_allow_html=True)
                 st.markdown("</div>", unsafe_allow_html=True)
+
+            # ── KeyBERT keyword extraction (no LLM) ───────────────────────────
+            kb_resume = r.get("keybert_resume_kws", [])
+            kb_jd     = r.get("keybert_jd_kws", [])
+            kb_overlap = r.get("keybert_overlap", [])
+            if kb_resume:
+                st.write("")
+                st.markdown(
+                    '<div class="section-label" style="margin-bottom:0.4rem;">'
+                    '🔬 KeyBERT Keyword Extraction'
+                    '<span style="font-size:0.72rem;font-weight:400;color:#aab0c4;margin-left:8px;">'
+                    'BERT embeddings + MMR · zero LLM</span></div>',
+                    unsafe_allow_html=True,
+                )
+                kb_cols = st.columns(2) if kb_jd else [st.container()]
+                with kb_cols[0]:
+                    st.markdown(
+                        f'<div class="card"><div class="section-label">📄 Resume Keywords ({len(kb_resume)})</div>',
+                        unsafe_allow_html=True,
+                    )
+                    chips = "".join(f'<span class="chip chip-green">{k}</span>' for k in kb_resume)
+                    st.markdown(f'<div class="chips">{chips}</div>', unsafe_allow_html=True)
+                    st.markdown("</div>", unsafe_allow_html=True)
+                if kb_jd:
+                    with kb_cols[1]:
+                        st.markdown(
+                            f'<div class="card"><div class="section-label">📋 JD Keywords ({len(kb_jd)})</div>',
+                            unsafe_allow_html=True,
+                        )
+                        for kw in kb_jd:
+                            color = "chip-green" if kw in kb_overlap else "chip-red"
+                            st.markdown(
+                                f'<span class="chip {color}">{kw}</span>',
+                                unsafe_allow_html=True,
+                            )
+                        st.markdown("</div>", unsafe_allow_html=True)
+                    if kb_overlap:
+                        st.caption(f"✅ {len(kb_overlap)} of {len(kb_jd)} JD keywords found in your resume by KeyBERT")
+                    else:
+                        st.caption("❌ No JD keywords matched in resume by KeyBERT")
 
             # ── Strong / Weak areas ────────────────────────────────────────────
             col_strong, col_weak = st.columns(2)
@@ -476,7 +689,7 @@ with tab_ats:
                         plot_bgcolor="rgba(0,0,0,0)",
                         height=440,
                     )
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width='stretch')
                     st.caption(
                         "Teal = your resume coverage · Orange = JD requirement level · Scale 0–10 per category · Gap between shapes = areas to improve"
                     )
@@ -542,7 +755,7 @@ with tab_bullets:
                 data=st.session_state.resume_pdf_bytes,
                 file_name="rewritten_resume.pdf",
                 mime="application/pdf",
-                use_container_width=True,
+                width='stretch',
             )
             st.write("")
 
@@ -672,7 +885,7 @@ with tab_jd:
                         data=st.session_state.tailored_pdf_bytes,
                         file_name="tailored_resume.pdf",
                         mime="application/pdf",
-                        use_container_width=True,
+                        width='stretch',
                     )
 
             if cl and not cl.startswith("Error"):
@@ -682,7 +895,7 @@ with tab_jd:
                         data=cl.encode("utf-8"),
                         file_name="cover_letter.txt",
                         mime="text/plain",
-                        use_container_width=True,
+                        width='stretch',
                     )
 
             st.write("")
@@ -760,6 +973,43 @@ with tab_chat:
             with st.container():
                 st.markdown(f"🤖 {msg['content']}")
 
+                # ── Retrieval quality expander ─────────────────────────────────
+                chunks = msg.get("chunks") or []
+                if chunks:
+                    avg_hybrid = round(sum(c.get("hybrid_score", c.get("cosine_sim", 0.0)) for c in chunks) / len(chunks), 3)
+                    avg_color  = "#27ae60" if avg_hybrid >= 0.55 else "#e67e22" if avg_hybrid >= 0.35 else "#e74c3c"
+                    with st.expander(
+                        f"🔍 Retrieved context — {len(chunks)} chunks · avg hybrid score {avg_hybrid:.3f}",
+                        expanded=False,
+                    ):
+                        st.caption(
+                            "Resume chunks fed to the LLM. Hybrid = BM25 lexical + BGE dense, fused by weighted score normalisation."
+                        )
+                        for i, chunk in enumerate(chunks):
+                            hybrid = chunk.get("hybrid_score", chunk.get("cosine_sim", 0.0))
+                            dense  = chunk.get("dense_score",  chunk.get("cosine_sim", 0.0))
+                            bm25   = chunk.get("bm25_score",   0.0)
+                            cidx   = chunk["chunk_index"]
+                            text   = chunk["text"]
+                            bar_color = "#27ae60" if hybrid >= 0.55 else "#e67e22" if hybrid >= 0.35 else "#e74c3c"
+                            bar_w     = int(hybrid * 100)
+                            st.markdown(
+                                f'<div style="margin-bottom:10px;padding:10px 12px;border-radius:8px;'
+                                f'background:#f8f9fc;border:1px solid #e0e4f0;">'
+                                f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">'
+                                f'<span style="font-size:0.75rem;font-weight:700;color:#8890a4;">Chunk #{cidx}</span>'
+                                f'<span style="font-size:0.78rem;font-weight:800;color:{bar_color};">hybrid {hybrid:.3f}</span>'
+                                f'<span style="font-size:0.72rem;color:#3452c7;">dense {dense:.3f}</span>'
+                                f'<span style="font-size:0.72rem;color:#e67e22;">bm25 {bm25:.3f}</span>'
+                                f'<div style="flex:1;background:#e0e4f0;border-radius:4px;height:5px;">'
+                                f'<div style="background:{bar_color};width:{bar_w}%;height:5px;border-radius:4px;"></div>'
+                                f'</div></div>'
+                                f'<p style="font-size:0.8rem;color:#4a4e6a;margin:0;line-height:1.6;">'
+                                f'{text[:300]}{"…" if len(text) > 300 else ""}</p>'
+                                f'</div>',
+                                unsafe_allow_html=True,
+                            )
+
     if user_msg := st.chat_input("Ask anything about your resume or interview prep…"):
         if not st.session_state.groq_client:
             st.error("Please provide a Groq API key first.")
@@ -769,17 +1019,33 @@ with tab_chat:
             st.session_state.chat_history.append({"role": "user", "content": user_msg})
 
             with st.spinner("Retrieving context & generating…"):
-                reply, updated_summary = chat_with_resume(
+                reply, updated_summary, chunks = chat_with_resume(
                     user_message=user_msg,
                     chat_history=st.session_state.chat_history[:-1],
                     groq_client=st.session_state.groq_client,
                     target_role=target_role,
                     session_summary=st.session_state.session_summary,
                     rapidapi_key=st.session_state.rapidapi_key,
+                    vectorstore=st.session_state.vectorstore,
                 )
 
+            # Store retrieved chunk metadata for sidebar highlight
+            st.session_state.last_retrieved = [
+                {
+                    "chunk_index":  c.get("chunk_index", -1),
+                    "dense_score":  c.get("dense_score",  0.0),
+                    "bm25_score":   c.get("bm25_score",   0.0),
+                    "hybrid_score": c.get("hybrid_score", 0.0),
+                }
+                for c in chunks
+            ]
+
             st.session_state.session_summary = updated_summary
-            st.session_state.chat_history.append({"role": "assistant", "content": reply})
+            st.session_state.chat_history.append({
+                "role": "assistant",
+                "content": reply,
+                "chunks": chunks,
+            })
             st.rerun()
 
     if st.session_state.chat_history:
@@ -787,6 +1053,79 @@ with tab_chat:
             st.session_state.chat_history = []
             st.session_state.session_summary = ""
             st.rerun()
+
+    # ── PCA Embedding Visualization ───────────────────────────────────────────
+    pca_coords   = st.session_state.pca_coords
+    pca_variance = st.session_state.pca_variance
+    if pca_coords:
+        st.write("")
+        with st.expander(
+            f"📊 Embedding Space — PCA of {len(pca_coords)} resume chunks"
+            f"  (PC1 {pca_variance[0]*100:.1f}% · PC2 {pca_variance[1]*100:.1f}% variance)",
+            expanded=False,
+        ):
+            import plotly.graph_objects as go
+
+            # Find which chunk_indices were retrieved in the last assistant message
+            _retrieved_indices = set()
+            for _msg in reversed(st.session_state.chat_history):
+                if _msg["role"] == "assistant" and _msg.get("chunks"):
+                    _retrieved_indices = {c["chunk_index"] for c in _msg["chunks"]}
+                    break
+
+            _base   = [c for c in pca_coords if c["chunk_index"] not in _retrieved_indices]
+            _highlight = [c for c in pca_coords if c["chunk_index"] in _retrieved_indices]
+
+            fig = go.Figure()
+
+            # All chunks — grey
+            if _base:
+                fig.add_trace(go.Scatter(
+                    x=[c["x"] for c in _base],
+                    y=[c["y"] for c in _base],
+                    mode="markers+text",
+                    marker=dict(size=14, color="#c0c8e8", line=dict(color="#8890a4", width=1.5)),
+                    text=[f"#{c['chunk_index']}" for c in _base],
+                    textposition="top center",
+                    textfont=dict(size=10, color="#8890a4"),
+                    hovertext=[f"Chunk #{c['chunk_index']}<br>{c['text']}" for c in _base],
+                    hoverinfo="text",
+                    name="Resume chunks",
+                ))
+
+            # Retrieved chunks — highlighted orange
+            if _highlight:
+                fig.add_trace(go.Scatter(
+                    x=[c["x"] for c in _highlight],
+                    y=[c["y"] for c in _highlight],
+                    mode="markers+text",
+                    marker=dict(size=18, color="#e67e22", symbol="star",
+                                line=dict(color="#c0392b", width=2)),
+                    text=[f"#{c['chunk_index']}" for c in _highlight],
+                    textposition="top center",
+                    textfont=dict(size=11, color="#c0392b", family="Inter, sans-serif"),
+                    hovertext=[f"★ Retrieved — Chunk #{c['chunk_index']}<br>{c['text']}" for c in _highlight],
+                    hoverinfo="text",
+                    name="Retrieved for last query",
+                ))
+
+            fig.update_layout(
+                height=400,
+                margin=dict(l=20, r=20, t=40, b=20),
+                paper_bgcolor="#f8f9fc",
+                plot_bgcolor="#f8f9fc",
+                xaxis=dict(title=f"PC1 ({pca_variance[0]*100:.1f}%)", showgrid=True,
+                           gridcolor="#e0e4f0", zeroline=False),
+                yaxis=dict(title=f"PC2 ({pca_variance[1]*100:.1f}%)", showgrid=True,
+                           gridcolor="#e0e4f0", zeroline=False),
+                legend=dict(orientation="h", y=-0.15, font=dict(size=11)),
+                showlegend=True,
+            )
+            st.plotly_chart(fig, width='stretch')
+            st.caption(
+                "Each point is a resume chunk projected to 2D via PCA on BGE-small embeddings. "
+                "Nearby points are semantically similar. ★ = chunks retrieved for the last query."
+            )
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # ─────────────────────────────────────────────────────────────────────────────────
@@ -812,7 +1151,7 @@ with tab_portfolio:
         with col_t1:
             luminary_selected = st.button(
                 "☀️  Luminary — Clean & Minimal",
-                use_container_width=True,
+                width='stretch',
                 key="tmpl_luminary",
                 type="primary" if st.session_state.get("_tmpl") == "luminary" else "secondary",
             )
@@ -820,7 +1159,7 @@ with tab_portfolio:
         with col_t2:
             noir_selected = st.button(
                 "🌑  Noir — Dark Pro",
-                use_container_width=True,
+                width='stretch',
                 key="tmpl_noir",
                 type="primary" if st.session_state.get("_tmpl") == "noir" else "secondary",
             )
@@ -931,7 +1270,7 @@ with tab_portfolio:
             "🚀  Generate Portfolio & Publish to GitHub Pages",
             key="run_portfolio",
             disabled=not can_publish,
-            use_container_width=True,
+            width='stretch',
         ):
             # Ensure resume is structured
             with st.spinner("🗂️  Parsing resume structure…"):
@@ -997,11 +1336,11 @@ with tab_portfolio:
             st.markdown('<div class="section-label" style="margin-bottom:0.4rem;">⬇ Download Files</div>', unsafe_allow_html=True)
             dl_col1, dl_col2, dl_col3 = st.columns(3)
             with dl_col1:
-                st.download_button("⬇ index.html", data=files["index.html"], file_name="index.html", mime="text/html", use_container_width=True)
+                st.download_button("⬇ index.html", data=files["index.html"], file_name="index.html", mime="text/html", width='stretch')
             with dl_col2:
-                st.download_button("⬇ style.css",  data=files["style.css"],  file_name="style.css",  mime="text/css",  use_container_width=True)
+                st.download_button("⬇ style.css",  data=files["style.css"],  file_name="style.css",  mime="text/css",  width='stretch')
             with dl_col3:
-                st.download_button("⬇ script.js",  data=files["script.js"],  file_name="script.js",  mime="text/javascript", use_container_width=True)
+                st.download_button("⬇ script.js",  data=files["script.js"],  file_name="script.js",  mime="text/javascript", width='stretch')
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # TAB 6 — Interview Prep (Mock Interview + Upskill)
@@ -1114,7 +1453,7 @@ with tab_interview:
                     key="upskill_custom_input",
                 )
             with col_skill_btn:
-                run_custom = st.button("▶  Get Plan", key="run_upskill_custom", use_container_width=True)
+                run_custom = st.button("▶  Get Plan", key="run_upskill_custom", width='stretch')
 
             if run_custom and custom_skill.strip():
                 if not st.session_state.groq_client:
@@ -1170,7 +1509,7 @@ with tab_interview:
                             f'</div>',
                             unsafe_allow_html=True,
                         )
-                        if st.button(f"📅 Plan for {skill_name}", key=f"plan_{idx}", use_container_width=True):
+                        if st.button(f"📅 Plan for {skill_name}", key=f"plan_{idx}", width='stretch'):
                             if not st.session_state.groq_client:
                                 st.error("Please provide a Groq API key first.")
                             else:

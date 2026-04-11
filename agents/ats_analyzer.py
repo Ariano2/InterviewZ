@@ -12,10 +12,126 @@ Sub-score weights:
 """
 
 import json
+import os
 import re
+import warnings
 from typing import TypedDict
 
 from groq import Groq
+
+# ── Sentence-transformer + KeyBERT models (lazy-loaded, cached across calls) ──
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+_EMBED_MODEL   = None
+_KEYBERT_MODEL = None
+
+
+def _get_embed_model():
+    global _EMBED_MODEL
+    if _EMBED_MODEL is None:
+        warnings.filterwarnings("ignore")
+        from sentence_transformers import SentenceTransformer
+        _EMBED_MODEL = SentenceTransformer("BAAI/bge-small-en-v1.5")
+    return _EMBED_MODEL
+
+
+def _get_keybert():
+    global _KEYBERT_MODEL
+    if _KEYBERT_MODEL is None:
+        from keybert import KeyBERT
+        # Reuse the already-loaded BGE model — no extra download
+        _KEYBERT_MODEL = KeyBERT(model=_get_embed_model())
+    return _KEYBERT_MODEL
+
+
+def extract_keywords_keybert(text: str, top_n: int = 15) -> list:
+    """
+    Extract keyphrases from `text` using KeyBERT + BGE-small embeddings.
+
+    Uses Maximal Marginal Relevance (MMR) to balance relevance against
+    redundancy — so you get diverse keywords, not ten synonyms of the same idea.
+
+    keyphrase_ngram_range=(1,2): single words AND two-word phrases.
+    diversity=0.5: midpoint between max-relevance and max-diversity.
+
+    Returns a list of keyword strings (no scores).
+    """
+    try:
+        kw_model = _get_keybert()
+        results  = kw_model.extract_keywords(
+            text,
+            keyphrase_ngram_range=(1, 2),
+            stop_words="english",
+            top_n=top_n,
+            use_mmr=True,
+            diversity=0.5,
+        )
+        return [kw for kw, _score in results]
+    except Exception:
+        return []
+
+
+def compute_similarity_metrics(resume_text: str, jd_text: str) -> dict:
+    """
+    Encodes resume and JD with all-MiniLM-L6-v2 and computes four metrics.
+
+    All four use the same two embedding vectors — no extra model calls.
+
+    Metrics:
+      cosine     — cos(θ) = A·B  (= dot product since vectors are unit-normalised).
+                   Measures angle; magnitude-independent.
+
+      euclidean  — sqrt(Σ(Ai−Bi)²).  For unit vectors, d ∈ [0, 2], so
+                   euclidean_sim = 1 − d/2  maps it back to [0, 1].
+                   Equivalent to cosine for normalised vectors (d = sqrt(2*(1−cos))),
+                   but on a distance scale — different presentation, same geometry.
+
+      manhattan  — Σ|Ai−Bi|  (L1 norm).  Less sensitive than L2 to a few
+                   dominant dimensions blowing up the score.
+                   Converted: manhattan_sim = 1 / (1 + d/sqrt(dims)).
+
+      pearson    — mean-centred cosine: corr(A−Ā, B−B̄).
+                   Asks "do dimensions above average in the resume also tend to
+                   be above average in the JD?" — captures co-variance, not just
+                   alignment.
+
+    Returns dict with keys: cosine, euclidean, manhattan, pearson.
+    Values are floats in [0.0, 1.0].  Returns all -1.0 on failure.
+    """
+    _fail = {"cosine": -1.0, "euclidean": -1.0, "manhattan": -1.0, "pearson": -1.0}
+    try:
+        import numpy as np
+        from sentence_transformers import util
+
+        model = _get_embed_model()
+        a = model.encode(resume_text[:4000], normalize_embeddings=True)  # shape (384,)
+        b = model.encode(jd_text[:4000],     normalize_embeddings=True)
+
+        # Cosine (dot product on unit vectors)
+        cosine = float(np.clip(np.dot(a, b), 0.0, 1.0))
+
+        # Euclidean similarity  (distance → similarity)
+        euc_dist = float(np.linalg.norm(a - b))          # ∈ [0, 2] for unit vecs
+        euclidean = round(float(np.clip(1.0 - euc_dist / 2.0, 0.0, 1.0)), 3)
+
+        # Manhattan similarity
+        man_dist  = float(np.sum(np.abs(a - b)))
+        dims      = float(len(a))
+        manhattan = round(float(np.clip(1.0 / (1.0 + man_dist / (dims ** 0.5)), 0.0, 1.0)), 3)
+
+        # Pearson correlation
+        a_c = a - a.mean();  b_c = b - b.mean()
+        denom = (np.linalg.norm(a_c) * np.linalg.norm(b_c))
+        pearson = round(float(np.clip(np.dot(a_c, b_c) / denom, 0.0, 1.0)), 3) if denom > 1e-9 else 0.0
+
+        return {
+            "cosine":    round(cosine,    3),
+            "euclidean": euclidean,
+            "manhattan": manhattan,
+            "pearson":   pearson,
+        }
+    except Exception:
+        return _fail
+
 
 GROQ_MODEL = "openai/gpt-oss-120b"
 MAX_RESUME_CHARS = 7000
@@ -62,6 +178,12 @@ class ATSResult(TypedDict):
     # Meta
     used_jd: bool
     quant_detail: str
+    semantic_score: float   # cosine similarity vs JD; -1.0 when no JD or failure
+    similarity_metrics: dict  # {cosine, euclidean, manhattan, pearson}; empty when no JD
+    # KeyBERT
+    keybert_resume_kws: list  # BERT-extracted keyphrases from resume
+    keybert_jd_kws: list      # BERT-extracted keyphrases from JD ([] when no JD)
+    keybert_overlap: list     # keyphrases appearing in both
 
 
 _FALLBACK: ATSResult = {
@@ -79,6 +201,11 @@ _FALLBACK: ATSResult = {
     "summary": "Analysis could not be completed. Please try again.",
     "used_jd": False,
     "quant_detail": "",
+    "semantic_score": -1.0,
+    "similarity_metrics": {},
+    "keybert_resume_kws": [],
+    "keybert_jd_kws": [],
+    "keybert_overlap": [],
 }
 
 
@@ -269,22 +396,37 @@ def analyze_ats(
     Never raises — returns _FALLBACK on any failure.
     """
     try:
-        # Step 1 — LLM: keywords + qualitative ratings
+        # Step 1 — Model: embedding-based similarity metrics (no LLM involved)
+        if jd_text.strip():
+            sim_metrics    = compute_similarity_metrics(resume_text, jd_text)
+            semantic_score = sim_metrics.get("cosine", -1.0)
+        else:
+            sim_metrics    = {}
+            semantic_score = -1.0
+
+        # Step 1b — KeyBERT: unsupervised BERT keyword extraction (no LLM)
+        kb_resume_kws = extract_keywords_keybert(resume_text[:MAX_RESUME_CHARS], top_n=15)
+        kb_jd_kws     = extract_keywords_keybert(jd_text[:MAX_JD_CHARS], top_n=15) if jd_text.strip() else []
+        # Overlap: JD keyword appears (substring) in any resume keyword or vice versa
+        resume_kws_lower = " ".join(kb_resume_kws).lower()
+        kb_overlap = [kw for kw in kb_jd_kws if kw.lower() in resume_kws_lower]
+
+        # Step 2 — LLM: keywords + qualitative ratings
         llm = _llm_analysis(resume_text, target_role, client, jd_text)
 
         required_kws = [str(k) for k in (llm.get("required_keywords") or []) if k]
 
-        # Step 2 — Programmatic sub-scores
+        # Step 3 — Programmatic sub-scores
         matched, missing, kw_pct = _check_keywords(resume_text, required_kws)
         quant_score, quant_detail = _quantification_rate(resume_text)
         section_score = _section_completeness(resume_text)
 
-        # Step 3 — LLM-rated sub-scores (clamped)
+        # Step 4 — LLM-rated sub-scores (clamped)
         action_score = max(0, min(100, int(llm.get("action_verb_rating") or 0)
                                   or _programmatic_action_verb_score(resume_text)))
         fmt_score    = max(0, min(100, int(llm.get("formatting_rating") or 70)))
 
-        # Step 4 — Weighted final score
+        # Step 5 — Weighted final score
         final = round(
             WEIGHTS["keyword"]        * kw_pct        +
             WEIGHTS["quantification"] * quant_score   +
@@ -309,6 +451,11 @@ def analyze_ats(
             summary=str(llm.get("summary") or ""),
             used_jd=bool(jd_text.strip()),
             quant_detail=quant_detail,
+            semantic_score=semantic_score,
+            similarity_metrics=sim_metrics,
+            keybert_resume_kws=kb_resume_kws,
+            keybert_jd_kws=kb_jd_kws,
+            keybert_overlap=kb_overlap,
         )
 
     except Exception:
