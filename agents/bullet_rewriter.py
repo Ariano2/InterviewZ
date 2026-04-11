@@ -13,7 +13,7 @@ GROQ_MODEL = "openai/gpt-oss-120b"
 MAX_RESUME_CHARS = 7500
 
 
-def rewrite_bullets(resume_text: str, target_role: str, client: Groq) -> List[Dict]:
+def rewrite_bullets(resume_text: str, target_role: str, client: Groq, model: str = GROQ_MODEL) -> List[Dict]:
     """
     Identifies weak bullets and rewrites them.
     Returns list of dicts: [{original, improved, why}, ...]
@@ -76,7 +76,7 @@ Only include bullets you are removing or rewriting. Return ONLY the JSON array."
 
     try:
         response = client.chat.completions.create(
-            model=GROQ_MODEL,
+            model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.55,
             max_tokens=5000,

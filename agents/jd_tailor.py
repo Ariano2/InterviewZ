@@ -19,6 +19,7 @@ def tailor_resume(
     jd_text: str,
     target_role: str,
     client: Groq,
+    model: str = GROQ_MODEL,
 ) -> Dict:
     """
     Rewrites bullets to inject missing JD keywords naturally.
@@ -63,7 +64,7 @@ Return ONLY the JSON array."""
 
     try:
         resp = client.chat.completions.create(
-            model=GROQ_MODEL,
+            model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
             max_tokens=6000,
@@ -96,6 +97,7 @@ def generate_cover_letter(
     jd_text: str,
     target_role: str,
     client: Groq,
+    model: str = GROQ_MODEL,
 ) -> str:
     """
     Generates a concise, role-specific cover letter grounded in the resume.
@@ -129,7 +131,7 @@ Return ONLY the cover letter text. No commentary, no subject line, no markdown."
 
     try:
         resp = client.chat.completions.create(
-            model=GROQ_MODEL,
+            model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.4,
             max_tokens=800,

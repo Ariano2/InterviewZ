@@ -1,11 +1,9 @@
 """
 rag/ingest.py
-Chunks resume text, embeds with sentence-transformers, persists to Chroma.
-Also saves a plain-text BM25 corpus (JSON) alongside Chroma for hybrid retrieval.
+Chunks resume text, embeds with sentence-transformers, persists to Supabase pgvector.
+Also returns the plain-text corpus for in-memory BM25 hybrid retrieval.
 """
 import contextlib
-import io
-import json
 import logging
 import os
 import warnings
@@ -22,15 +20,11 @@ for _logger in ("transformers", "sentence_transformers", "huggingface_hub"):
 import transformers
 transformers.logging.set_verbosity_error()
 
-import chromadb
-from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from supabase import create_client, Client
 
-CHROMA_PERSIST_DIR = "./chroma_db"
-EMBED_MODEL_NAME   = "BAAI/bge-small-en-v1.5"
-COLLECTION_NAME    = "resume_chunks"
-BM25_CORPUS_PATH   = "./chroma_db/bm25_corpus.json"
+EMBED_MODEL_NAME = "BAAI/bge-small-en-v1.5"
 
 
 @contextlib.contextmanager
@@ -50,8 +44,22 @@ def _get_embeddings() -> HuggingFaceEmbeddings:
         )
 
 
-def ingest_resume(text: str) -> Chroma:
-    """Split → embed → upsert into Chroma. Returns the vectorstore."""
+def _get_supabase(access_token: str) -> Client:
+    url = os.environ["SUPABASE_URL"]
+    key = os.environ["SUPABASE_ANON_KEY"]
+    client = create_client(url, key)
+    client.postgrest.auth(access_token)
+    return client
+
+
+def ingest_resume(text: str, user_id: str, access_token: str) -> dict:
+    """
+    Split → embed → upsert into Supabase pgvector.
+
+    Returns a dict with:
+      corpus  — list[{chunk_index, text}]  for BM25 hybrid retrieval
+      vectors — list[list[float]]           for PCA visualisation (pre-computed, free)
+    """
     chunks = RecursiveCharacterTextSplitter(
         chunk_size=700,
         chunk_overlap=50,
@@ -61,34 +69,26 @@ def ingest_resume(text: str) -> Chroma:
     if not chunks:
         raise ValueError("Resume text is empty after splitting. Check the uploaded file.")
 
-    metadatas  = [{"source": "resume", "chunk_index": i} for i in range(len(chunks))]
-    embeddings = _get_embeddings()
+    embeddings_model = _get_embeddings()
+    with _quiet():
+        vectors = embeddings_model.embed_documents(chunks)
 
-    # Drop stale collection so re-uploads don't mix data
-    client = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
-    with contextlib.suppress(Exception):
-        client.delete_collection(COLLECTION_NAME)
+    supabase = _get_supabase(access_token)
 
-    vs = Chroma.from_texts(
-        texts=chunks,
-        embedding=embeddings,
-        metadatas=metadatas,
-        persist_directory=CHROMA_PERSIST_DIR,
-        collection_name=COLLECTION_NAME,
-    )
+    # Delete stale chunks for this user so re-uploads don't mix data
+    supabase.table("resume_chunks").delete().eq("user_id", user_id).execute()
 
-    # Persist BM25 corpus — plain text list for lexical retrieval
+    # Insert new chunks with their vectors
+    rows = [
+        {
+            "user_id":     user_id,
+            "chunk_index": i,
+            "content":     chunk,
+            "embedding":   vector,
+        }
+        for i, (chunk, vector) in enumerate(zip(chunks, vectors))
+    ]
+    supabase.table("resume_chunks").insert(rows).execute()
+
     corpus = [{"text": c, "chunk_index": i} for i, c in enumerate(chunks)]
-    with open(BM25_CORPUS_PATH, "w", encoding="utf-8") as f:
-        json.dump(corpus, f, ensure_ascii=False)
-
-    return vs
-
-
-def load_vectorstore() -> Chroma:
-    """Load the persisted Chroma collection for querying."""
-    return Chroma(
-        persist_directory=CHROMA_PERSIST_DIR,
-        embedding_function=_get_embeddings(),
-        collection_name=COLLECTION_NAME,
-    )
+    return {"corpus": corpus, "vectors": vectors}

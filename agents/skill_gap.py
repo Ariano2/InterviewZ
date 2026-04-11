@@ -17,6 +17,7 @@ def analyze_skill_gap(
     missing_keywords: List[str],
     target_role: str,
     client: Groq,
+    model: str = GROQ_MODEL,
 ) -> Dict:
     """
     Groups matched and missing JD keywords into 5-6 skill categories and
@@ -50,7 +51,7 @@ Return ONLY JSON:
 
     try:
         resp = client.chat.completions.create(
-            model=GROQ_MODEL,
+            model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.15,
             max_tokens=1500,

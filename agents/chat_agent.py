@@ -89,7 +89,9 @@ def chat_with_resume(
     target_role: str = "",
     session_summary: str = "",
     rapidapi_key: str = "",
-    vectorstore=None,
+    corpus: list[dict] | None = None,
+    access_token: str = "",
+    model: str = GROQ_MODEL,
 ) -> tuple[str, str]:
     """
     RAG-grounded, agentic chat with optional live job search.
@@ -98,8 +100,8 @@ def chat_with_resume(
     Returns (assistant_reply, updated_session_summary, retrieved_chunks).
     retrieved_chunks is a list[dict] — each has "text", "chunk_index", "dense_score", "bm25_score", "hybrid_score".
     """
-    # 1. Retrieve relevant resume chunks — hybrid BM25 + dense, cached vectorstore
-    retrieved_chunks = retrieve_with_scores(user_message, k=4, vectorstore=vectorstore)
+    # 1. Retrieve relevant resume chunks — hybrid BM25 + dense (Supabase pgvector)
+    retrieved_chunks = retrieve_with_scores(user_message, k=4, corpus=corpus, access_token=access_token)
     context = "\n\n---\n\n".join(c["text"] for c in retrieved_chunks) if retrieved_chunks else ""
     context_block = (
         context if context
@@ -154,15 +156,15 @@ NEVER use filler openers like "Great question!", "Sure!", "Absolutely!". Just de
 
     # 4. First LLM call — with tools if key is available, plain otherwise
     if rapidapi_key:
-        raw_reply = _call_groq_with_tools(messages, groq_client, rapidapi_key)
+        raw_reply = _call_groq_with_tools(messages, groq_client, rapidapi_key, model=model)
     else:
-        raw_reply = _call_groq(messages, groq_client)
+        raw_reply = _call_groq(messages, groq_client, model=model)
 
     reply = _clean_markdown(raw_reply)
 
     # 5. Compress session summary if history is long
     updated_summary = _maybe_compress_summary(
-        session_summary, chat_history, reply, groq_client
+        session_summary, chat_history, reply, groq_client, model=model
     )
 
     return reply, updated_summary, retrieved_chunks
@@ -172,14 +174,14 @@ NEVER use filler openers like "Great question!", "Sure!", "Absolutely!". Just de
 # Tool-calling flow
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _call_groq_with_tools(messages: list[dict], client: Groq, rapidapi_key: str) -> str:
+def _call_groq_with_tools(messages: list[dict], client: Groq, rapidapi_key: str, model: str = GROQ_MODEL) -> str:
     """
     First pass: LLM decides whether to call search_jobs.
     If it does: execute the tool, inject results, do a second pass.
     If not: return the first response directly.
     """
     resp1 = client.chat.completions.create(
-        model=GROQ_MODEL,
+        model=model,
         messages=messages,
         tools=TOOLS,
         tool_choice="auto",
@@ -234,7 +236,7 @@ def _call_groq_with_tools(messages: list[dict], client: Groq, rapidapi_key: str)
 
     # Second pass — synthesise final reply with job data
     resp2 = client.chat.completions.create(
-        model=GROQ_MODEL,
+        model=model,
         messages=messages,
         temperature=0.65,
         max_tokens=2200,
@@ -247,10 +249,10 @@ def _call_groq_with_tools(messages: list[dict], client: Groq, rapidapi_key: str)
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _call_groq(messages: list[dict], client: Groq) -> str:
+def _call_groq(messages: list[dict], client: Groq, model: str = GROQ_MODEL) -> str:
     try:
         response = client.chat.completions.create(
-            model=GROQ_MODEL,
+            model=model,
             messages=messages,
             temperature=0.65,
             max_tokens=2200,
@@ -266,6 +268,7 @@ def _maybe_compress_summary(
     chat_history: list[dict],
     latest_reply: str,
     client: Groq,
+    model: str = GROQ_MODEL,
 ) -> str:
     if len(chat_history) < MAX_HISTORY_TURNS * 2:
         return existing_summary
@@ -287,7 +290,7 @@ def _maybe_compress_summary(
 
     try:
         resp = client.chat.completions.create(
-            model=GROQ_MODEL,
+            model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
             max_tokens=200,

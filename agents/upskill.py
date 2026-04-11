@@ -18,6 +18,7 @@ def recommend_skills(
     target_role: str,
     missing_keywords: List[str],
     client: Groq,
+    model: str = GROQ_MODEL,
 ) -> List[Dict]:
     """
     Returns top 5 skills the candidate should learn next.
@@ -50,7 +51,7 @@ Return ONLY a JSON array (no markdown):
 
     try:
         resp = client.chat.completions.create(
-            model=GROQ_MODEL,
+            model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
             max_tokens=1000,
@@ -66,7 +67,7 @@ Return ONLY a JSON array (no markdown):
         return []
 
 
-def generate_learning_plan(skill: str, target_role: str, client: Groq) -> Dict:
+def generate_learning_plan(skill: str, target_role: str, client: Groq, model: str = GROQ_MODEL) -> Dict:
     """
     Generates a 4-week structured learning plan for a skill.
     Returns:
@@ -106,7 +107,7 @@ Include 4-6 resources. Use realistic, well-known resource names (channels like F
 
     try:
         resp = client.chat.completions.create(
-            model=GROQ_MODEL,
+            model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
             max_tokens=1800,

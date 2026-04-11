@@ -16,6 +16,7 @@ def generate_qna(
     resume_text: str,
     target_role: str,
     client: Groq,
+    model: str = GROQ_MODEL,
 ) -> Dict[str, List[Dict]]:
     """
     Reads the resume and generates interview Q&As in three difficulty tiers.
@@ -92,7 +93,7 @@ Return ONLY valid JSON (no markdown):
     empty = {"easy": [], "medium": [], "hard": []}
     try:
         resp = client.chat.completions.create(
-            model=GROQ_MODEL,
+            model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.4,
             max_tokens=6000,

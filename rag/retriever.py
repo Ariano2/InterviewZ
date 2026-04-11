@@ -1,10 +1,10 @@
 """
 rag/retriever.py
-Hybrid BM25 + dense (BGE) retrieval with score fusion.
+Hybrid BM25 + dense (BGE via Supabase pgvector) retrieval with score fusion.
 
 Pipeline per query:
-  1. Dense  — Chroma cosine similarity, fetch TOP_CANDIDATES candidates
-  2. BM25   — Okapi BM25 over the full corpus, fetch TOP_CANDIDATES candidates
+  1. Dense  — Supabase match_resume_chunks RPC (cosine similarity), TOP_CANDIDATES results
+  2. BM25   — Okapi BM25 over the in-memory corpus (passed from session state), TOP_CANDIDATES
   3. Union  — merge candidate sets; non-overlapping candidates get score=0 on the missing side
   4. Normalise — each score list independently min-max normalised to [0, 1]
   5. Fuse   — hybrid = ALPHA * dense_norm + (1 - ALPHA) * bm25_norm
@@ -21,11 +21,24 @@ Viva defence notes:
     agrees the chunk is relevant. Prevents padding the prompt with noise.
 """
 
-import json
+import contextlib
+import logging
+import os
 import re
-from pathlib import Path
+import warnings
 
-from rag.ingest import BM25_CORPUS_PATH, load_vectorstore
+warnings.filterwarnings("ignore")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+os.environ.setdefault("TQDM_DISABLE", "1")
+
+for _logger in ("transformers", "sentence_transformers", "huggingface_hub"):
+    logging.getLogger(_logger).setLevel(logging.ERROR)
+
+import transformers
+transformers.logging.set_verbosity_error()
+
+from langchain_huggingface import HuggingFaceEmbeddings
+from supabase import create_client, Client
 
 # ── Tunable constants ─────────────────────────────────────────────────────────
 ALPHA            = 0.6   # weight for dense score  (1-ALPHA goes to BM25)
@@ -33,6 +46,32 @@ TOP_CANDIDATES   = 10    # candidates fetched from each retriever before fusion
 MIN_HYBRID_SCORE = 0.15  # chunks below this are dropped (noise filter)
 RAW_DENSE_FLOOR  = 0.20  # minimum raw cosine similarity before any retrieval happens
                          # guards against injecting resume chunks for greetings/small talk
+
+EMBED_MODEL_NAME = "BAAI/bge-small-en-v1.5"
+
+
+@contextlib.contextmanager
+def _quiet():
+    with open(os.devnull, "w") as sink:
+        with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
+            yield
+
+
+def _get_embeddings() -> HuggingFaceEmbeddings:
+    with _quiet():
+        return HuggingFaceEmbeddings(
+            model_name=EMBED_MODEL_NAME,
+            model_kwargs={"device": "cpu"},
+            encode_kwargs={"normalize_embeddings": True},
+        )
+
+
+def _get_supabase(access_token: str) -> Client:
+    url = os.environ["SUPABASE_URL"]
+    key = os.environ["SUPABASE_ANON_KEY"]
+    client = create_client(url, key)
+    client.postgrest.auth(access_token)
+    return client
 
 
 # ── BM25 helpers ──────────────────────────────────────────────────────────────
@@ -42,34 +81,22 @@ def _tokenize(text: str) -> list[str]:
     return re.findall(r"[a-z0-9]+(?:-[a-z0-9]+)*", text.lower())
 
 
-def _load_bm25():
+def _bm25_scores_for_query(query: str, corpus: list[dict]) -> dict[int, float]:
     """
-    Load corpus from disk and build a BM25Okapi index.
-    Returns (index, corpus_list) or (None, []) if corpus missing.
+    Returns {chunk_index: raw_bm25_score} over the in-memory corpus.
+    Returns {} if corpus is empty or rank_bm25 unavailable.
     """
-    path = Path(BM25_CORPUS_PATH)
-    if not path.exists():
-        return None, []
+    if not corpus:
+        return {}
     try:
         from rank_bm25 import BM25Okapi
-        corpus = json.loads(path.read_text(encoding="utf-8"))
         tokenized = [_tokenize(entry["text"]) for entry in corpus]
-        return BM25Okapi(tokenized), corpus
+        bm25 = BM25Okapi(tokenized)
+        tokens = _tokenize(query)
+        scores = bm25.get_scores(tokens)
+        return {entry["chunk_index"]: float(scores[i]) for i, entry in enumerate(corpus)}
     except Exception:
-        return None, []
-
-
-def _bm25_scores_for_query(query: str) -> dict[int, float]:
-    """
-    Returns {chunk_index: raw_bm25_score} for every chunk in the corpus.
-    Returns {} if BM25 index cannot be built.
-    """
-    bm25, corpus = _load_bm25()
-    if bm25 is None or not corpus:
         return {}
-    tokens = _tokenize(query)
-    scores = bm25.get_scores(tokens)          # ndarray, one score per corpus entry
-    return {entry["chunk_index"]: float(scores[i]) for i, entry in enumerate(corpus)}
 
 
 # ── Normalisation ─────────────────────────────────────────────────────────────
@@ -86,7 +113,6 @@ def _minmax(scores: dict[int, float]) -> dict[int, float]:
         return {}
     lo, hi = min(scores.values()), max(scores.values())
     if hi == 0.0:
-        # Every score is zero — no signal from this retriever
         return {k: 0.0 for k in scores}
     if hi == lo:
         return {k: 1.0 for k in scores}
@@ -94,12 +120,43 @@ def _minmax(scores: dict[int, float]) -> dict[int, float]:
     return {k: (v - lo) / span for k, v in scores.items()}
 
 
+# ── Dense retrieval via Supabase pgvector ─────────────────────────────────────
+
+def _dense_scores(
+    query: str,
+    access_token: str,
+) -> tuple[dict[int, float], dict[int, str]]:
+    """
+    Embed query, call match_resume_chunks RPC, return (scores, texts) dicts.
+    RLS on the table ensures only the authenticated user's chunks are returned.
+    """
+    embeddings_model = _get_embeddings()
+    with _quiet():
+        q_vec = embeddings_model.embed_query(query)
+
+    supabase = _get_supabase(access_token)
+    result = supabase.rpc(
+        "match_resume_chunks",
+        {"query_embedding": q_vec, "match_count": TOP_CANDIDATES},
+    ).execute()
+
+    scores: dict[int, float] = {}
+    texts:  dict[int, str]   = {}
+    for row in (result.data or []):
+        idx = row["chunk_index"]
+        scores[idx] = float(row["similarity"])
+        texts[idx]  = row["content"]
+
+    return scores, texts
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def retrieve_with_scores(
     query: str,
     k: int = 4,
-    vectorstore=None,
+    corpus: list[dict] | None = None,
+    access_token: str = "",
 ) -> list[dict]:
     """
     Hybrid retrieval. Returns up to k chunks, sorted by hybrid score descending.
@@ -107,26 +164,21 @@ def retrieve_with_scores(
     Each dict:
       text         — chunk text
       chunk_index  — position in original split
-      dense_score  — cosine similarity from BGE (0–1)
+      dense_score  — cosine similarity from BGE pgvector (0–1)
       bm25_score   — normalised BM25 Okapi score (0–1)
       hybrid_score — ALPHA * dense + (1-ALPHA) * bm25  (0–1)
 
-    Accepts an optional pre-loaded vectorstore to avoid reloading the embedding
-    model on every call (pass st.session_state.vectorstore from the app).
+    corpus  — in-memory list[{chunk_index, text}] built at ingest time (for BM25).
+              Pass st.session_state.vectorstore from the app.
+    access_token — Supabase JWT for the authenticated user (for dense RPC).
     """
-    try:
-        vs = vectorstore or load_vectorstore()
+    if not access_token:
+        return []
+    corpus = corpus or []
 
-        # ── 1. Dense retrieval — fetch more candidates than we'll return ──────
-        raw = vs.similarity_search_with_score(query, k=TOP_CANDIDATES)
-        # Chroma returns squared L2; convert to cosine for normalised vectors
-        dense_raw: dict[int, float] = {}
-        dense_texts: dict[int, str] = {}
-        for doc, l2_sq in raw:
-            idx = doc.metadata.get("chunk_index", -1)
-            cosine = max(0.0, min(1.0, 1.0 - l2_sq / 2.0))
-            dense_raw[idx] = cosine
-            dense_texts[idx] = doc.page_content
+    try:
+        # ── 1. Dense retrieval ────────────────────────────────────────────────
+        dense_raw, dense_texts = _dense_scores(query, access_token)
 
         # Early exit: if even the best raw cosine is below floor, the query is
         # conversational / off-topic (e.g. "Hello", "thanks"). Don't inject noise.
@@ -134,10 +186,9 @@ def retrieve_with_scores(
             return []
 
         # ── 2. BM25 retrieval — full corpus scores ────────────────────────────
-        bm25_raw = _bm25_scores_for_query(query)
+        bm25_raw = _bm25_scores_for_query(query, corpus)
 
         # ── 3. Union of candidate indices ─────────────────────────────────────
-        # Take top-TOP_CANDIDATES from BM25 by raw score to keep candidate set bounded
         top_bm25_indices = set(
             sorted(bm25_raw, key=bm25_raw.get, reverse=True)[:TOP_CANDIDATES]
         )
@@ -158,9 +209,7 @@ def retrieve_with_scores(
             for idx in all_indices
         }
 
-        # ── 6. Resolve texts for BM25-only candidates (not in Chroma results) ─
-        # Load corpus once if needed
-        _, corpus = _load_bm25()
+        # ── 6. Resolve texts for BM25-only candidates ─────────────────────────
         corpus_map: dict[int, str] = {e["chunk_index"]: e["text"] for e in corpus}
         for idx in all_indices:
             if idx not in dense_texts and idx in corpus_map:
@@ -185,12 +234,17 @@ def retrieve_with_scores(
         return []
 
 
-def retrieve_context(query: str, k: int = 4, vectorstore=None) -> str:
+def retrieve_context(
+    query: str,
+    k: int = 4,
+    corpus: list[dict] | None = None,
+    access_token: str = "",
+) -> str:
     """
     Convenience wrapper — returns a concatenated context string.
     Used by agents that don't need per-chunk scores.
     """
-    chunks = retrieve_with_scores(query, k=k, vectorstore=vectorstore)
+    chunks = retrieve_with_scores(query, k=k, corpus=corpus, access_token=access_token)
     if not chunks:
         return ""
     return "\n\n---\n\n".join(c["text"] for c in chunks)

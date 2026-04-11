@@ -7,6 +7,7 @@ import os
 import streamlit as st
 from dotenv import load_dotenv
 from groq import Groq
+from supabase import create_client
 
 from agents.ats_analyzer import analyze_ats
 from agents.bullet_rewriter import rewrite_bullets
@@ -62,6 +63,7 @@ _DEFAULTS = {
     "chat_history": [],
     "session_summary": "",
     "groq_client": None,
+    "groq_model": "openai/gpt-oss-120b",
     "rapidapi_key": os.getenv("RAPIDAPI_KEY", "").strip(),
     # Interview Prep
     "interview_qna": None,           # Dict {easy, medium, hard} from generate_qna
@@ -84,6 +86,62 @@ _DEFAULTS = {
 for k, v in _DEFAULTS.items():
     st.session_state.setdefault(k, v)
 
+# ── Supabase auth session state ───────────────────────────────────────────────────
+for _k, _v in {
+    "supabase_user_id": "",
+    "supabase_access_token": "",
+    "supabase_email": "",
+}.items():
+    st.session_state.setdefault(_k, _v)
+
+
+def _get_supabase_anon():
+    return create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_ANON_KEY"])
+
+
+def _show_auth_page():
+    st.markdown(
+        '<h1 style="font-family:Inter,sans-serif;font-weight:700;color:#1a1a2e;">🎯 PrepSense AI</h1>',
+        unsafe_allow_html=True,
+    )
+    st.markdown("**AI-powered resume reviewer, interview coach, and career mentor.**")
+    st.divider()
+
+    tab_login, tab_signup = st.tabs(["Login", "Sign Up"])
+
+    with tab_login:
+        email    = st.text_input("Email", key="login_email")
+        password = st.text_input("Password", type="password", key="login_password")
+        if st.button("Login", use_container_width=True, type="primary"):
+            try:
+                sb  = _get_supabase_anon()
+                res = sb.auth.sign_in_with_password({"email": email, "password": password})
+                st.session_state.supabase_user_id     = res.user.id
+                st.session_state.supabase_access_token = res.session.access_token
+                st.session_state.supabase_email        = res.user.email
+                st.rerun()
+            except Exception as _e:
+                st.error(f"Login failed: {_e}")
+
+    with tab_signup:
+        email    = st.text_input("Email", key="signup_email")
+        password = st.text_input("Password (min 6 chars)", type="password", key="signup_password")
+        if st.button("Create Account", use_container_width=True):
+            try:
+                sb  = _get_supabase_anon()
+                res = sb.auth.sign_up({"email": email, "password": password})
+                if res.user:
+                    st.success("Account created! Check your email to confirm, then log in.")
+                else:
+                    st.error("Sign up failed — try a different email.")
+            except Exception as _e:
+                st.error(f"Sign up failed: {_e}")
+
+
+if not st.session_state.supabase_user_id:
+    _show_auth_page()
+    st.stop()
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown(
@@ -92,6 +150,11 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
     st.caption("RESUME · RAG · INTERVIEW PREP")
+    st.caption(f"👤 {st.session_state.supabase_email}")
+    if st.button("Logout", use_container_width=True):
+        for _k in ("supabase_user_id", "supabase_access_token", "supabase_email"):
+            st.session_state[_k] = ""
+        st.rerun()
     st.divider()
 
     target_role = st.text_input(
@@ -99,6 +162,23 @@ with st.sidebar:
         value="Software Development Engineer",
         placeholder="e.g. ML Engineer at Google",
     )
+
+    _GROQ_MODELS = {
+        "GPT-OSS 120B (default)": "openai/gpt-oss-120b",
+        "Llama 3.3 70B":          "llama-3.3-70b-versatile",
+        "Llama 3.1 8B (fast)":    "llama-3.1-8b-instant",
+        "Gemma 2 9B":             "gemma2-9b-it",
+    }
+    _selected_model_name = st.selectbox(
+        "🤖 Model",
+        list(_GROQ_MODELS.keys()),
+        index=list(_GROQ_MODELS.values()).index(
+            st.session_state.groq_model
+            if st.session_state.groq_model in _GROQ_MODELS.values()
+            else "openai/gpt-oss-120b"
+        ),
+    )
+    st.session_state.groq_model = _GROQ_MODELS[_selected_model_name]
 
     st.divider()
     st.markdown('<p class="section-label">Status</p>', unsafe_allow_html=True)
@@ -269,59 +349,38 @@ if uploaded_file and uploaded_file.name != st.session_state.loaded_filename:
 
     with st.spinner("🗂️ Building RAG index…"):
         try:
-            ingest_resume(text)
+            _ingest_result = ingest_resume(
+                text,
+                st.session_state.supabase_user_id,
+                st.session_state.supabase_access_token,
+            )
+            _corpus  = _ingest_result["corpus"]
+            _vectors = _ingest_result["vectors"]
             st.session_state.resume_indexed = True
         except Exception as e:
             st.error(f"RAG indexing failed: {e}")
+            _corpus, _vectors = [], []
 
     if st.session_state.resume_indexed:
-        # ── Step 1: load vectorstore ONCE, cache in session state ──────────────
-        try:
-            from rag.ingest import load_vectorstore
-            _vs = load_vectorstore()
-            st.session_state.vectorstore = _vs   # cached — reused for all queries
+        # ── Step 1: cache corpus for BM25 hybrid retrieval ─────────────────────
+        st.session_state.vectorstore    = _corpus   # reused as BM25 corpus
+        st.session_state.resume_chunks  = [
+            {"chunk_index": c["chunk_index"], "text": c["text"]} for c in _corpus
+        ]
 
-            # Fetch docs + metas via LangChain wrapper
-            _result = _vs.get()
-            _docs   = _result.get("documents") or []
-            _metas  = _result.get("metadatas") or []
-
-            # Try to pull pre-computed embeddings directly from the underlying
-            # chromadb collection (bypasses LangChain wrapper limitations)
-            try:
-                _raw    = _vs._collection.get(include=["embeddings"])
-                _embeds = _raw.get("embeddings") or []
-            except Exception:
-                _embeds = []
-
-            st.session_state.resume_chunks = [
-                {"chunk_index": (_metas[i] or {}).get("chunk_index", i), "text": _docs[i]}
-                for i in range(len(_docs))
-            ]
-        except Exception as _e:
-            st.warning(f"Could not load chunks for sidebar: {_e}")
-            _docs, _metas, _embeds = [], [], []
-
-        # ── Step 2: PCA — use stored Chroma embeddings, fall back to re-encoding ─
+        # ── Step 2: PCA — use vectors returned by ingest (already computed) ────
+        _docs = [c["text"] for c in _corpus]
         if len(_docs) >= 2:
             try:
                 import numpy as np
                 from sklearn.decomposition import PCA
 
-                if len(_embeds) >= 2:
-                    # Fast path: use vectors already stored in Chroma — no re-encoding
-                    _arr = np.array(_embeds, dtype=float)
-                else:
-                    # Fallback: re-encode using the shared BGE model instance
-                    # (already loaded by ats_analyzer — no extra download)
-                    from agents.ats_analyzer import _get_embed_model
-                    _arr = _get_embed_model().encode(_docs, normalize_embeddings=True)
-
+                _arr = np.array(_vectors, dtype=float)
                 _pca = PCA(n_components=2)
                 _xy  = _pca.fit_transform(_arr)
                 st.session_state.pca_coords = [
                     {
-                        "chunk_index": (_metas[i] or {}).get("chunk_index", i),
+                        "chunk_index": _corpus[i]["chunk_index"],
                         "x":    float(_xy[i, 0]),
                         "y":    float(_xy[i, 1]),
                         "text": _docs[i][:120],
@@ -382,6 +441,7 @@ with tab_ats:
                         target_role,
                         st.session_state.groq_client,
                         jd_text=st.session_state.jd_text,
+                        model=st.session_state.groq_model,
                     )
 
                 if st.session_state.jd_text.strip() and st.session_state.ats_result:
@@ -391,7 +451,61 @@ with tab_ats:
                             st.session_state.ats_result.get("missing_keywords", []),
                             target_role,
                             st.session_state.groq_client,
+                            model=st.session_state.groq_model,
                         )
+
+        # ── Model Comparison Mode ─────────────────────────────────────────────
+        with st.expander("⚖️  Compare two models side-by-side", expanded=False):
+            if not st.session_state.resume_text:
+                st.caption("Upload a resume first.")
+            else:
+                _CMP_MODELS = {
+                    "GPT-OSS 120B": "openai/gpt-oss-120b",
+                    "Llama 3.3 70B": "llama-3.3-70b-versatile",
+                    "Llama 3.1 8B (fast)": "llama-3.1-8b-instant",
+                    "Gemma 2 9B": "gemma2-9b-it",
+                }
+                _c1, _c2 = st.columns(2)
+                with _c1:
+                    _m1_name = st.selectbox("Model A", list(_CMP_MODELS.keys()), index=0, key="cmp_m1")
+                with _c2:
+                    _m2_name = st.selectbox("Model B", list(_CMP_MODELS.keys()), index=1, key="cmp_m2")
+
+                if st.button("▶  Run Comparison", key="run_comparison"):
+                    if not st.session_state.groq_client:
+                        st.error("Groq API key required.")
+                    else:
+                        _m1_id = _CMP_MODELS[_m1_name]
+                        _m2_id = _CMP_MODELS[_m2_name]
+                        with st.spinner(f"Running {_m1_name} vs {_m2_name}…"):
+                            _r1 = analyze_ats(
+                                st.session_state.resume_text,
+                                target_role,
+                                st.session_state.groq_client,
+                                jd_text=st.session_state.jd_text,
+                                model=_m1_id,
+                            )
+                            _r2 = analyze_ats(
+                                st.session_state.resume_text,
+                                target_role,
+                                st.session_state.groq_client,
+                                jd_text=st.session_state.jd_text,
+                                model=_m2_id,
+                            )
+
+                        _col1, _col2 = st.columns(2)
+                        for _col, _res, _mname in [(_col1, _r1, _m1_name), (_col2, _r2, _m2_name)]:
+                            with _col:
+                                _sc = max(0, min(100, _res.get("ats_score", 0)))
+                                _clr = "#27ae60" if _sc >= 70 else "#e67e22" if _sc >= 45 else "#e74c3c"
+                                st.markdown(
+                                    f"**{_mname}**  \n"
+                                    f'<span style="font-size:2rem;font-weight:700;color:{_clr};">{_sc}</span>/100',
+                                    unsafe_allow_html=True,
+                                )
+                                st.caption("**Strong areas:** " + "; ".join(_res.get("strong_areas", [])[:3]))
+                                st.caption("**Weak areas:** " + "; ".join(_res.get("weak_areas", [])[:3]))
+                                st.caption("**Summary:** " + _res.get("summary", "—"))
 
         if r := st.session_state.ats_result:
             prev = st.session_state.ats_result_prev
@@ -727,6 +841,7 @@ with tab_bullets:
                         st.session_state.resume_text,
                         target_role,
                         st.session_state.groq_client,
+                        model=st.session_state.groq_model,
                     )
                     st.session_state.bullets_result = pairs
 
@@ -735,6 +850,7 @@ with tab_bullets:
                     structure = structure_resume(
                         st.session_state.resume_text,
                         st.session_state.groq_client,
+                        model=st.session_state.groq_model,
                     )
                     st.session_state.resume_structure = structure
 
@@ -840,6 +956,7 @@ with tab_jd:
                         st.session_state.jd_text,
                         target_role,
                         st.session_state.groq_client,
+                        model=st.session_state.groq_model,
                     )
                     st.session_state.jd_tailor_result = tailor_result
 
@@ -850,6 +967,7 @@ with tab_jd:
                         st.session_state.jd_text,
                         target_role,
                         st.session_state.groq_client,
+                        model=st.session_state.groq_model,
                     )
                     st.session_state.cover_letter = cl
 
@@ -859,6 +977,7 @@ with tab_jd:
                         structure = st.session_state.resume_structure or structure_resume(
                             st.session_state.resume_text,
                             st.session_state.groq_client,
+                            model=st.session_state.groq_model,
                         )
                         st.session_state.resume_structure = structure
                         pdf_bytes = build_resume_pdf(
@@ -1026,7 +1145,9 @@ with tab_chat:
                     target_role=target_role,
                     session_summary=st.session_state.session_summary,
                     rapidapi_key=st.session_state.rapidapi_key,
-                    vectorstore=st.session_state.vectorstore,
+                    corpus=st.session_state.vectorstore,
+                    access_token=st.session_state.supabase_access_token,
+                    model=st.session_state.groq_model,
                 )
 
             # Store retrieved chunk metadata for sidebar highlight
@@ -1277,6 +1398,7 @@ with tab_portfolio:
                 structure = st.session_state.resume_structure or structure_resume(
                     st.session_state.resume_text,
                     st.session_state.groq_client,
+                    model=st.session_state.groq_model,
                 )
                 st.session_state.resume_structure = structure
 
@@ -1286,6 +1408,7 @@ with tab_portfolio:
                     target_role,
                     chosen_template,
                     st.session_state.groq_client,
+                    model=st.session_state.groq_model,
                 )
                 st.session_state.portfolio_files           = files
                 st.session_state.portfolio_dummy_sections  = dummy_sections
@@ -1379,6 +1502,7 @@ with tab_interview:
                             st.session_state.resume_text,
                             target_role,
                             st.session_state.groq_client,
+                            model=st.session_state.groq_model,
                         )
 
             qna = st.session_state.interview_qna
@@ -1465,6 +1589,7 @@ with tab_interview:
                             custom_skill.strip(),
                             target_role,
                             st.session_state.groq_client,
+                            model=st.session_state.groq_model,
                         )
 
             st.divider()
@@ -1487,6 +1612,7 @@ with tab_interview:
                             target_role,
                             missing_kw,
                             st.session_state.groq_client,
+                            model=st.session_state.groq_model,
                         )
 
             recs = st.session_state.upskill_recommended
@@ -1519,6 +1645,7 @@ with tab_interview:
                                         skill_name,
                                         target_role,
                                         st.session_state.groq_client,
+                                        model=st.session_state.groq_model,
                                     )
 
             # ── Learning Plan ─────────────────────────────────────────────────

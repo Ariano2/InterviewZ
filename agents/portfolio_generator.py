@@ -92,7 +92,7 @@ def _detect_and_fill_dummies(structure: dict) -> Tuple[dict, List[str]]:
 
 # ── LLM content enhancement ────────────────────────────────────────────────────
 
-def _enhance_content(structure: dict, target_role: str, client: Groq) -> dict:
+def _enhance_content(structure: dict, target_role: str, client: Groq, model: str = GROQ_MODEL) -> dict:
     """
     Single LLM call. Generates:
     - tagline: punchy 6-10 word phrase
@@ -149,7 +149,7 @@ Return ONLY valid JSON:
 
     try:
         resp = client.chat.completions.create(
-            model=GROQ_MODEL,
+            model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.4,
             max_tokens=800,
@@ -339,6 +339,7 @@ def generate_portfolio(
     target_role: str,
     template_name: str,           # "luminary" or "noir"
     client: Groq,
+    model: str = GROQ_MODEL,
 ) -> Tuple[Dict[str, str], List[str]]:
     """
     Builds a complete portfolio website from resume structure.
@@ -355,7 +356,7 @@ def generate_portfolio(
     structure, dummy_sections = _detect_and_fill_dummies(resume_structure)
 
     # 2. LLM enhancement
-    enhanced = _enhance_content(structure, target_role, client)
+    enhanced = _enhance_content(structure, target_role, client, model=model)
 
     tagline      = enhanced.get("tagline", "Building things that matter")
     about        = enhanced.get("about", "")

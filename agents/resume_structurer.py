@@ -11,7 +11,7 @@ GROQ_MODEL = "openai/gpt-oss-120b"
 MAX_CHARS = 8000
 
 
-def structure_resume(resume_text: str, client: Groq) -> dict:
+def structure_resume(resume_text: str, client: Groq, model: str = GROQ_MODEL) -> dict:
     """
     Parses resume text into a structured dict.
 
@@ -87,7 +87,7 @@ Return ONLY the JSON object."""
 
     try:
         response = client.chat.completions.create(
-            model=GROQ_MODEL,
+            model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1,
             max_tokens=3500,

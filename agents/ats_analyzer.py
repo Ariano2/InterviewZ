@@ -321,6 +321,7 @@ def _llm_analysis(
     target_role: str,
     client: Groq,
     jd_text: str = "",
+    model: str = GROQ_MODEL,
 ) -> dict:
     """
     Single LLM call that handles:
@@ -367,7 +368,7 @@ Return ONLY a valid JSON object. No markdown fences, no extra text.
 Return ONLY the JSON object."""
 
     response = client.chat.completions.create(
-        model=GROQ_MODEL,
+        model=model,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.15,
         max_tokens=4000,
@@ -389,6 +390,7 @@ def analyze_ats(
     target_role: str,
     client: Groq,
     jd_text: str = "",
+    model: str = GROQ_MODEL,
 ) -> ATSResult:
     """
     Rubric-based ATS analysis.
@@ -412,7 +414,7 @@ def analyze_ats(
         kb_overlap = [kw for kw in kb_jd_kws if kw.lower() in resume_kws_lower]
 
         # Step 2 — LLM: keywords + qualitative ratings
-        llm = _llm_analysis(resume_text, target_role, client, jd_text)
+        llm = _llm_analysis(resume_text, target_role, client, jd_text, model=model)
 
         required_kws = [str(k) for k in (llm.get("required_keywords") or []) if k]
 
