@@ -1,130 +1,117 @@
-# 🎯 PrepSense AI — Resume Reviewer
+# PrepSense AI
 
-RAG-powered resume intelligence built with **Streamlit + Groq + LangChain + Chroma**.
+An AI-powered career platform built with Streamlit, Groq, LangChain, and Chroma. Upload a resume and get ATS scoring, bullet rewrites, JD-based tailoring, RAG-powered chat, interview prep, skill gap analysis, semantic job matching, portfolio generation, and a from-scratch resume builder — all in one app.
 
-## Stack
+---
+
+## Tech Stack
 
 | Layer | Technology |
 |---|---|
-| UI | Streamlit ≥ 1.34 |
-| LLM (primary) | Groq API — `llama-3.3-70b-versatile` |
-| LLM (optional) | Ollama — local via OpenAI-compatible endpoint |
-| Embeddings | `sentence-transformers/all-MiniLM-L6-v2` — runs fully locally |
-| Vector Store | Chroma — persistent local DB |
-| PDF parsing | PyMuPDF (`fitz`) |
-| DOCX parsing | python-docx |
-| Env management | python-dotenv |
-
----
-
-## Quickstart
-
-```bash
-# 1. Install dependencies
-pip install -r requirements.txt
-
-# 2. Set your Groq API key (free at console.groq.com)
-cp .env.example .env
-# Edit .env → add your key
-
-# 3. Launch
-streamlit run app.py
-# Opens at http://localhost:8501
-```
-
----
-
-## Features
-
-### 🏆 ATS Analysis
-- Upload PDF or DOCX resume
-- Groq scores ATS compatibility 0–100 for your target role
-- Shows matched vs missing keywords as visual chips
-- Lists 3–5 strong areas and 3–5 weak gaps
-
-### ✍️ Bullet Point Rewriter
-- Identifies 5–7 weak bullets (vague, passive, no metrics)
-- Rewrites each with: power verb + quantified impact + role keywords
-- Shows "Why it's stronger" for each rewrite
-- Download all rewrites as `.txt`
-
-### 💬 RAG-Powered Resume Chat
-- Multi-turn conversation — ask anything about your resume
-- Every reply is grounded via Chroma semantic search (top-4 chunks)
-- Supports Groq (cloud, fast) or Ollama (local, private) via sidebar toggle
-- Full conversation history kept in session state
-
-### 📄 Raw Text View
-- Inspect exactly how your resume was parsed
-- Download as `.txt`
+| UI | Streamlit 1.34+ |
+| LLM | Groq API — GPT-OSS 120B / Llama 3.3 70B / Llama 3.1 8B / Gemma 2 9B |
+| Embeddings | `BAAI/bge-small-en-v1.5` via SentenceTransformers (384-dim, local CPU) |
+| RAG Retrieval | LangChain + Chroma (dense) + BM25 (sparse) — hybrid fusion |
+| Auth | Supabase (email/password, JWT session tokens) |
+| Job Search | RapidAPI → JSearch (LinkedIn / Indeed / Glassdoor) |
+| GitHub Integration | GitHub OAuth Device Flow — publishes portfolio to GitHub Pages |
+| PDF Parsing | PyMuPDF (`fitz`) + python-docx |
+| PDF Generation | WeasyPrint |
+| Dimensionality Reduction | scikit-learn PCA (chunk embedding visualization) |
+| Env | python-dotenv |
 
 ---
 
 ## Project Structure
 
 ```
-resume_reviewer/
-├── app.py                      ← Streamlit app (entry point)
-├── requirements.txt
-├── .env.example
-│
-├── utils/
-│   └── file_parser.py          ← PDF / DOCX → plain text
-│
-├── rag/
-│   ├── ingest.py               ← Chunk → embed → Chroma upsert
-│   └── retriever.py            ← Similarity search → context string
-│
-└── agents/
-    ├── ats_analyzer.py         ← ATS score + keywords (Groq, JSON output)
-    ├── bullet_rewriter.py      ← Bullet improvement (Groq)
-    └── chat_agent.py           ← RAG chat (Groq or Ollama)
+app.py                      — Orchestrator: page config, auth, sidebar, upload, tab dispatch
+styles.css                  — All UI styles and utility classes (no inline CSS in Python)
+requirements.txt
+
+agents/
+  ats_analyzer.py           — ATS scoring: keyword extraction, semantic similarity, weighted composite score
+  bullet_rewriter.py        — Identifies weak bullets, rewrites with power verbs + metrics via Groq
+  chat_agent.py             — Agentic RAG chat: tool-calling loop for ATS + job search within chat
+  jd_tailor.py              — Rewrites resume bullets to match a JD; generates cover letter
+  skill_gap.py              — Radar chart skill gap analysis between resume and JD
+  resume_structurer.py      — Parses resume into structured JSON (name, education, experience, etc.)
+  resume_builder.py         — Renders structured JSON → styled PDF via WeasyPrint
+  resume_maker.py           — Enhances bullets and generates summary for the resume builder form
+  portfolio_generator.py    — Generates Luminary/Noir portfolio HTML+CSS+JS from resume structure
+  github_publisher.py       — Creates GitHub repo, pushes portfolio files, enables Pages via API
+  interview_prep.py         — Generates Easy/Medium/Hard Q&A sets grounded in the resume
+  upskill.py                — Recommends skills based on gaps; generates 4-week learning roadmap
+  job_matcher.py            — Encodes job descriptions with BGE-small, ranks by cosine similarity to resume
+  job_search.py             — RapidAPI JSearch wrapper — fetches live jobs by role, location, type
+
+rag/
+  ingest.py                 — Chunks text (RecursiveCharacterTextSplitter), embeds with BGE-small,
+                              upserts to Chroma, returns corpus + raw vectors for PCA
+  retriever.py              — Hybrid retrieval: dense (Chroma cosine) + BM25 sparse, score fusion,
+                              returns top-k chunks with per-chunk dense/BM25/hybrid scores
+
+tabs/
+  ats.py                    — ATS Score tab UI: JD input, score breakdown, keyword chips, delta vs prev run
+  bullets.py                — Bullet Rewriter tab UI: before/after cards, download rewrites
+  jd_tailor.py              — JD Tailor + Cover Letter tab UI
+  chat.py                   — Resume Chat tab UI: message thread, PCA scatter plot, retrieved chunk debug
+  portfolio.py              — Portfolio Generator tab UI: template picker, GitHub OAuth, publish flow
+  interview.py              — Interview Prep + Upskill tab UI: MCQ expanders, skill cards, week plan
+  job_match.py              — Job Match tab UI: search form, job cards with match %, ATS/Tailor shortcuts
+  raw_text.py               — Raw parsed text view with download
+  resume_maker.py           — Make My Resume tab UI: multi-section form, live HTML preview, PDF export
+
+ui/
+  components.py             — Shared render helpers: require_resume, score_bar, chip_list,
+                              bullet_diff, job_card, score_color, alert_green/blue, section_heading
+
+utils/
+  file_parser.py            — PDF (PyMuPDF) and DOCX (python-docx) → clean plain text
+  embed_cache.py            — Process-level BGE-small singleton (loaded once, shared by all agents)
 ```
 
 ---
 
-## RAG Pipeline (for viva explanation)
+## User Flow
 
+1. **Auth** — User signs up / logs in via Supabase email auth. JWT access token stored in session state. All subsequent Supabase calls (RAG upsert) use this token for row-level security.
+
+2. **Upload** — PDF or DOCX parsed to plain text. Text is chunked (500 chars, 80 overlap), embedded with BGE-small, and upserted to Chroma. BM25 index built from the same corpus. PCA run on chunk vectors for visualization. Resume embedding (full text, 384-dim) pre-computed and cached in session state for reuse across all features.
+
+3. **ATS Score** — Optional JD paste. Groq extracts keywords and scores 5 dimensions (semantic similarity 50%, keyword coverage 20%, formatting 15%, section completeness 10%, quantified impact 5%). BGE-small computes cosine similarity between resume and JD vectors. Composite weighted score with delta comparison against previous run.
+
+4. **Bullet Rewriter** — Groq identifies 5–7 weak bullets, rewrites each with a power verb, quantified impact, and role keywords. Before/after diff cards with reasoning.
+
+5. **JD Tailor** — Rewrites resume bullets specifically for a pasted JD. Highlights added keywords. Optionally generates a tailored cover letter. PDF export via WeasyPrint.
+
+6. **Resume Chat** — Multi-turn RAG chat. Each query hits the hybrid retriever (dense + BM25 fusion), injects top-k chunks into Groq context. Agentic mode: Groq can invoke `analyze_ats` or `search_jobs` as tools within the conversation. Retrieved chunk indices and scores shown in sidebar with score bars.
+
+7. **Portfolio** — Chooses Luminary (light) or Noir (dark) template. GitHub OAuth device flow (no stored credentials — user approves in browser). Groq generates portfolio content from resume structure. HTML/CSS/JS files pushed to a new GitHub repo; Pages enabled via API. Live URL returned.
+
+8. **Interview Prep** — Groq generates ~34 Q&A pairs (Easy/Medium/Hard) grounded in the user's specific resume — projects, tech choices, trade-offs. Upskill tab recommends missing skills and generates a 4-week learning roadmap with YouTube resource links.
+
+9. **Job Match** — RapidAPI fetches live jobs. Each job description encoded with BGE-small. Cosine similarity against pre-computed resume embedding ranks jobs. One-click to load any JD into ATS or Tailor tabs.
+
+10. **Resume Builder** — Form-based builder (personal info, education, experience, projects, skills, certifications). Groq enhances bullet points and generates a professional summary. Renders to styled HTML preview and downloadable PDF.
+
+---
+
+## Session & State Management
+
+All runtime state lives in `st.session_state`. Key entries: `resume_text`, `resume_embedding` (numpy array, pre-computed on upload), `vectorstore` (BM25 corpus), `resume_chunks`, `pca_coords`, `groq_client` (recreated only when API key changes), `chat_history`, `last_retrieved` (chunk indices + scores from last query). No database is used for session data — Supabase is used only for auth and RAG vector persistence.
+
+---
+
+## Quickstart
+
+```bash
+pip install -r requirements.txt
+
+# Copy and fill in keys
+cp .env.example .env
+# Required: GROQ_API_KEY, SUPABASE_URL, SUPABASE_ANON_KEY
+# Optional: RAPIDAPI_KEY (job search), GITHUB_CLIENT_ID + GITHUB_CLIENT_SECRET (portfolio)
+
+streamlit run app.py
 ```
-Resume PDF/DOCX
-      │
-      ▼
-file_parser.py  →  raw text string
-      │
-      ▼
-RecursiveCharacterTextSplitter  (chunk_size=500, overlap=80)
-      │
-      ▼
-HuggingFaceEmbeddings  (all-MiniLM-L6-v2, local, free, ~22MB)
-      │
-      ▼
-Chroma.from_texts()  →  persisted to ./chroma_db/
-      │
-  [on query]
-      │
-      ▼
-vectorstore.similarity_search(query, k=4)
-      │
-      ▼
-top-4 chunks → injected into Groq system prompt → answer
-```
-
-## Viva Talking Points
-
-1. **Why RAG instead of just pasting the resume?**  
-   Chroma retrieves only the *relevant* sections per query. For a 3-page resume this matters less, but it demonstrates production-ready architecture and avoids context-window bloat for longer documents.
-
-2. **Why `all-MiniLM-L6-v2` for embeddings?**  
-   22MB model, runs in-process on CPU, zero API cost, zero network calls. Cosine similarity in ~5ms per query.
-
-3. **Why Chroma?**  
-   Zero server setup, persists to disk automatically, works offline, and has first-class LangChain integration.
-
-4. **Why Groq over OpenAI?**  
-   ~300 tokens/second on free tier, same REST API shape, `llama-3.3-70b` is competitive quality. Perfect for live demos.
-
-5. **Ollama toggle?**  
-   Shows multi-LLM awareness. Same interface, just swaps to `localhost:11434/v1`. Useful for offline/private use cases — relevant for enterprise deployments.
-
-6. **ATS JSON output reliability?**  
-   The prompt enforces JSON-only output. Post-processing strips any markdown fences with regex before `json.loads()`. Typed as `ATSResult` TypedDict. Falls back to a safe default dict on any exception — never crashes the UI.

@@ -76,6 +76,12 @@ html, body, .stApp, [data-testid="stAppViewContainer"],
     border-radius: 12px;
     padding: 1.2rem 1.4rem;
     margin-bottom: 1rem;
+    box-shadow: 0 1px 4px rgba(26,26,46,0.04);
+    transition: box-shadow 0.18s ease, border-color 0.18s ease;
+}
+.card:hover {
+    box-shadow: 0 4px 16px rgba(79,110,247,0.09);
+    border-color: #c7d0fa;
 }
 .card-blue {
     background: #f0f3ff;
@@ -84,6 +90,23 @@ html, body, .stApp, [data-testid="stAppViewContainer"],
     padding: 1.2rem 1.4rem;
     margin-bottom: 1rem;
 }
+
+/* ── Tab intro banner (replaces card-blue + inline style combos) ── */
+.tab-intro {
+    background: linear-gradient(135deg, #f0f3ff 0%, #eef1ff 100%);
+    border: 1px solid #c7d0fa;
+    border-radius: 12px;
+    padding: 1.1rem 1.4rem;
+    margin-bottom: 1rem;
+}
+.tab-intro .section-label { margin-bottom: 0.3rem; }
+.tab-intro p {
+    font-size: 0.9rem;
+    color: #3452c7;
+    line-height: 1.65;
+    margin: 0;
+}
+.tab-intro p strong { color: #1a1a2e; }
 
 /* ── Score widget ── */
 .score-wrap {
@@ -95,6 +118,7 @@ html, body, .stApp, [data-testid="stAppViewContainer"],
     border-radius: 12px;
     padding: 1.4rem 1.8rem;
     margin-bottom: 1rem;
+    box-shadow: 0 1px 4px rgba(26,26,46,0.04);
 }
 
 /* ── Chips ── */
@@ -105,7 +129,9 @@ html, body, .stApp, [data-testid="stAppViewContainer"],
     font-size: 0.78rem;
     font-family: 'JetBrains Mono', monospace;
     font-weight: 500;
+    transition: opacity 0.12s ease;
 }
+.chip:hover { opacity: 0.8; }
 .chip-green { background: #e8f8ef; color: #1a7a45; border: 1px solid #a8dfc0; }
 .chip-red   { background: #fef0f0; color: #c0392b; border: 1px solid #f5b7b1; }
 .chip-blue  { background: #eef1ff; color: #3452c7; border: 1px solid #c0caff; }
@@ -129,6 +155,7 @@ html, body, .stApp, [data-testid="stAppViewContainer"],
     font-size: 1rem;
     line-height: 1.6;
     color: #1a1a2e;
+    box-shadow: 0 1px 4px rgba(26,26,46,0.04);
 }
 
 /* ── Buttons ── */
@@ -141,9 +168,13 @@ html, body, .stApp, [data-testid="stAppViewContainer"],
     font-size: 0.88rem !important;
     border-radius: 8px !important;
     padding: 0.5rem 1.4rem !important;
-    transition: background 0.15s ease !important;
+    transition: background 0.15s ease, transform 0.1s ease, box-shadow 0.15s ease !important;
 }
-.stButton > button:hover { background: #3452c7 !important; }
+.stButton > button:hover {
+    background: #3452c7 !important;
+    box-shadow: 0 4px 14px rgba(79,110,247,0.28) !important;
+}
+.stButton > button:active { transform: scale(0.98) !important; }
 
 .stDownloadButton > button {
     background: #f0f3ff !important;
@@ -151,6 +182,7 @@ html, body, .stApp, [data-testid="stAppViewContainer"],
     border: 1px solid #c7d0fa !important;
     font-weight: 600 !important;
     border-radius: 8px !important;
+    transition: background 0.15s ease !important;
 }
 .stDownloadButton > button:hover { background: #e0e7ff !important; }
 
@@ -169,7 +201,9 @@ html, body, .stApp, [data-testid="stAppViewContainer"],
     border-bottom: 2px solid transparent !important;
     margin-bottom: -2px !important;
     background: transparent !important;
+    transition: color 0.15s ease !important;
 }
+.stTabs [data-baseweb="tab"]:hover { color: #4f6ef7 !important; }
 .stTabs [aria-selected="true"] {
     color: #4f6ef7 !important;
     border-bottom-color: #4f6ef7 !important;
@@ -184,6 +218,7 @@ html, body, .stApp, [data-testid="stAppViewContainer"],
     font-family: 'Inter', sans-serif !important;
     border-radius: 8px !important;
     font-size: 0.93rem !important;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease !important;
 }
 .stTextInput > div > div > input:focus,
 .stTextArea > div > textarea:focus {
@@ -213,7 +248,9 @@ html, body, .stApp, [data-testid="stAppViewContainer"],
     border: 2px dashed #4f6ef7 !important;
     border-radius: 12px !important;
     color: #1a1a2e !important;
+    transition: background 0.15s ease !important;
 }
+[data-testid="stFileUploadDropzone"]:hover { background: #f0f3ff !important; }
 [data-testid="stFileUploadDropzone"] span,
 [data-testid="stFileUploadDropzone"] small,
 [data-testid="stFileUploadDropzone"] .uploadedFileName { color: #1a1a2e !important; }
@@ -221,4 +258,277 @@ html, body, .stApp, [data-testid="stAppViewContainer"],
     background: #4f6ef7 !important;
     color: white !important;
     border: none !important;
+}
+
+/* ═══════════════════════════════════════════════════════
+   UTILITY CLASSES  — replace scattered inline styles
+   ═══════════════════════════════════════════════════════ */
+
+/* Text colours */
+.text-ok      { color: #1a7a45; }
+.text-warn    { color: #a05800; }
+.text-error   { color: #c0392b; }
+.text-muted   { color: #8890a4; }
+.text-primary { color: #3452c7; }
+.text-dark    { color: #1a1a2e; }
+.text-body    { color: #4a4e6a; }
+
+/* Body-copy helpers */
+.body-text  { font-size: 0.9rem;  color: #4a4e6a; line-height: 1.65; margin: 0 0 0.5rem; }
+.meta-text  { font-size: 0.82rem; color: #8890a4; line-height: 1.5;  margin: 0; }
+.label-text { font-size: 0.85rem; color: #4a4e6a; margin: 0 0 6px; }
+
+/* Coloured alert banners (not Streamlit st.info/st.warning — custom) */
+.alert-green {
+    background: #e8f5e9;
+    border: 1px solid #a5d6a7;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 0.88rem;
+    color: #1a7a45;
+}
+.alert-blue {
+    background: #e8eeff;
+    border: 1px solid #c0caff;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 0.88rem;
+    color: #3452c7;
+}
+.alert-orange {
+    background: #fff8e1;
+    border: 1px solid #ffe082;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 0.88rem;
+    color: #a05800;
+}
+
+/* ── Card item text (for lists inside cards) ── */
+.card-item {
+    font-size: 0.92rem;
+    color: #1a4a2e;
+    margin: 4px 0;
+}
+.card-item-weak { color: #7a2020; }
+
+/* ── Score bar ── */
+.score-bar-track {
+    background: #eef0f7;
+    border-radius: 4px;
+    height: 6px;
+    overflow: hidden;
+}
+.score-bar-fill {
+    height: 6px;
+    border-radius: 4px;
+    transition: width 0.3s ease;
+}
+
+/* ── Job card ── */
+.job-card {
+    background: #ffffff;
+    border: 1px solid #e0e4f0;
+    border-radius: 12px;
+    padding: 16px 18px 12px;
+    margin-bottom: 12px;
+    box-shadow: 0 1px 6px rgba(26,26,46,0.05);
+    transition: box-shadow 0.18s ease, border-color 0.18s ease;
+}
+.job-card:hover {
+    box-shadow: 0 4px 18px rgba(79,110,247,0.11);
+    border-color: #c0caff;
+}
+.job-card-title {
+    font-size: 1rem;
+    font-weight: 700;
+    color: #1a1a2e;
+    margin: 0 0 2px;
+}
+.job-card-meta {
+    font-size: 0.85rem;
+    color: #4a4e6a;
+    margin: 0 0 6px;
+}
+.job-card-snippet {
+    font-size: 0.82rem;
+    color: #555;
+    margin: 0;
+    line-height: 1.55;
+}
+
+/* ── Match badge (job score pill) ── */
+.match-badge {
+    border-radius: 10px;
+    padding: 8px 12px;
+    text-align: center;
+    min-width: 70px;
+}
+.match-score {
+    font-size: 1.5rem;
+    font-weight: 800;
+    line-height: 1;
+    margin: 0;
+}
+.match-label {
+    font-size: 0.65rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin: 0;
+}
+
+/* ── Chunk debug card (chat RAG expander) ── */
+.chunk-card {
+    margin-bottom: 10px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: #f8f9fc;
+    border: 1px solid #e0e4f0;
+}
+.chunk-scores {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+    flex-wrap: wrap;
+}
+.chunk-text {
+    font-size: 0.8rem;
+    color: #4a4e6a;
+    margin: 0;
+    line-height: 1.6;
+}
+
+/* ── Resource row (upskill section) ── */
+.resource-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    background: #f8f9fc;
+    border: 1px solid #e8eaf4;
+    margin-bottom: 6px;
+    transition: background 0.12s ease;
+}
+.resource-row:hover { background: #f0f3ff; }
+.resource-title {
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: #1a1a2e;
+}
+.resource-link {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #3452c7;
+    text-decoration: none;
+    white-space: nowrap;
+}
+.resource-link:hover { text-decoration: underline; }
+
+/* ── Priority badge ── */
+.priority-badge {
+    font-size: 0.75rem;
+    font-weight: 700;
+    padding: 2px 9px;
+    border-radius: 100px;
+    display: inline-block;
+}
+.priority-high   { color: #e74c3c; background: rgba(231,76,60,0.09); }
+.priority-medium { color: #e67e22; background: rgba(230,126,34,0.09); }
+.priority-low    { color: #27ae60; background: rgba(39,174,96,0.09); }
+
+/* ── Week card (learning plan) ── */
+.week-card {
+    background: #ffffff;
+    border: 1px solid #e2e4ed;
+    border-radius: 10px;
+    padding: 14px;
+    height: 100%;
+    box-shadow: 0 1px 4px rgba(26,26,46,0.04);
+}
+.week-card-header {
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+}
+.week-card-goal {
+    font-weight: 600;
+    font-size: 0.88rem;
+    color: #1a1a2e;
+    margin: 0 0 8px;
+}
+.week-card ul {
+    margin: 0;
+    padding-left: 1rem;
+}
+.week-card li {
+    font-size: 0.82rem;
+    color: #4a4e6a;
+    margin: 3px 0;
+}
+
+/* ── Live URL button (portfolio publish) ── */
+.live-btn {
+    display: inline-block;
+    padding: 12px 28px;
+    background: linear-gradient(135deg, #27ae60, #1abc9c);
+    color: #fff !important;
+    border-radius: 10px;
+    font-weight: 700;
+    font-size: 1rem;
+    text-decoration: none;
+    transition: opacity 0.15s ease, transform 0.1s ease;
+}
+.live-btn:hover { opacity: 0.88; transform: translateY(-1px); }
+
+/* ── GitHub auth card ── */
+.gh-auth-card {
+    background: #f0fdf4;
+    border: 1.5px solid #27ae60;
+    border-radius: 10px;
+    padding: 18px 22px;
+}
+.gh-auth-card p { font-size: 0.9rem; color: #1a4a2e; margin: 0 0 10px; }
+.gh-auth-card .code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 1.6rem;
+    font-weight: 800;
+    letter-spacing: 0.15em;
+    color: #1a1a2e;
+    margin: 0 0 12px;
+}
+.gh-auth-card .hint { font-size: 0.82rem; color: #4a4e6a; margin: 0; }
+
+/* ── Metric grid cards (embedding similarity) ── */
+.metric-card {
+    padding: 12px 14px;
+    border-radius: 10px;
+    background: #f8f9fc;
+    border: 1px solid #e0e4f0;
+    text-align: center;
+    transition: box-shadow 0.15s ease;
+}
+.metric-card:hover { box-shadow: 0 3px 12px rgba(79,110,247,0.10); }
+.metric-label {
+    font-size: 0.75rem;
+    color: #8890a4;
+    font-weight: 500;
+    margin-bottom: 4px;
+}
+.metric-value {
+    font-size: 1.4rem;
+    font-weight: 800;
+}
+
+/* ── Fade-in entrance for cards ── */
+@keyframes fadeUp {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.card, .tab-intro, .job-card, .week-card {
+    animation: fadeUp 0.22s ease both;
 }

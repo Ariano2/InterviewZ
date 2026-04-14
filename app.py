@@ -5,30 +5,26 @@ Run with:  streamlit run app.py
 
 import os
 import streamlit as st
-import streamlit.components.v1 as components
 from dotenv import load_dotenv
 from groq import Groq
 from supabase import create_client
 
-from agents.ats_analyzer import analyze_ats
-from agents.bullet_rewriter import rewrite_bullets
-from agents.chat_agent import chat_with_resume
-from agents.jd_tailor import tailor_resume, generate_cover_letter
-from agents.skill_gap import analyze_skill_gap
-from agents.resume_structurer import structure_resume
-from agents.resume_builder import build_resume_pdf
-from agents.portfolio_generator import generate_portfolio
-from agents.github_publisher import request_device_code, poll_for_token, get_github_username, publish_portfolio
-from agents.interview_prep import generate_qna
-from agents.upskill import recommend_skills, generate_learning_plan, yt_search_url
-from agents.resume_maker import enhance_bullets, generate_summary as generate_maker_summary, render_resume_html
-from agents.job_matcher import match_jobs_to_resume
 from rag.ingest import ingest_resume
 from utils.file_parser import parse_uploaded_file
 
+import tabs.ats as tab_ats_mod
+import tabs.bullets as tab_bullets_mod
+import tabs.jd_tailor as tab_jd_mod
+import tabs.chat as tab_chat_mod
+import tabs.portfolio as tab_portfolio_mod
+import tabs.interview as tab_interview_mod
+import tabs.raw_text as tab_raw_mod
+import tabs.resume_maker as tab_maker_mod
+import tabs.job_match as tab_jobs_mod
+
 load_dotenv()
 
-# ── Page config ────────────────────────────────────
+# ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="PrepSense AI",
     page_icon="🎯",
@@ -36,38 +32,38 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Inject CSS from external file (cached so disk is read once per server start) ─
+# ── CSS (cached — disk read once per server start) ────────────────────────────
 _css_path = os.path.join(os.path.dirname(__file__), "styles.css")
 
 
 @st.cache_data
 def _load_css(path: str) -> str:
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return f.read()
 
 
 st.markdown(f"<style>{_load_css(_css_path)}</style>", unsafe_allow_html=True)
 
-# ── Session state ─────────────────────────────────────────────────────────────────
+# ── Session state defaults ────────────────────────────────────────────────────
 _DEFAULTS = {
     "resume_text": None,
     "resume_indexed": False,
     "loaded_filename": "",
     "ats_result": None,
-    "ats_result_prev": None,      # Previous run — for delta comparison
-    "jd_text": "",                # Optional pasted job description
-    "bullets_result": None,       # List[Dict] of {original, improved, why}
-    "resume_structure": None,     # Structured JSON from resume_structurer
-    "resume_pdf_bytes": None,     # Built PDF bytes
-    "jd_tailor_result": None,     # {rewrites, added_keywords}
-    "cover_letter": None,         # Plain-text cover letter
-    "tailored_pdf_bytes": None,   # PDF with JD-tailored bullets
-    "skill_gap_result": None,     # {categories, resume_scores, jd_scores}
-    "github_token": "",           # Device flow access token
-    "github_username": "",        # resolved after auth
-    "github_device_code": "",     # pending device auth
-    "github_user_code": "",       # shown to user
-    "portfolio_files": None,      # {"index.html":..., "style.css":..., "script.js":...}
+    "ats_result_prev": None,
+    "jd_text": "",
+    "bullets_result": None,
+    "resume_structure": None,
+    "resume_pdf_bytes": None,
+    "jd_tailor_result": None,
+    "cover_letter": None,
+    "tailored_pdf_bytes": None,
+    "skill_gap_result": None,
+    "github_token": "",
+    "github_username": "",
+    "github_device_code": "",
+    "github_user_code": "",
+    "portfolio_files": None,
     "portfolio_dummy_sections": [],
     "portfolio_pages_url": "",
     "chat_history": [],
@@ -75,24 +71,16 @@ _DEFAULTS = {
     "groq_client": None,
     "groq_model": "openai/gpt-oss-120b",
     "rapidapi_key": os.getenv("RAPIDAPI_KEY", "").strip(),
-    # Interview Prep
-    "interview_qna": None,           # Dict {easy, medium, hard} from generate_qna
-    # Upskill
-    "upskill_recommended": None,     # List[Dict] from recommend_skills
-    "upskill_plan": None,            # Dict from generate_learning_plan
-    "upskill_selected_skill": "",    # skill currently showing a plan for
-    # RAG chunks (loaded once on upload)
-    "resume_chunks": [],             # List[Dict] — {chunk_index, text} from vectorstore
-    # PCA embedding visualization (computed once on upload)
-    "pca_coords": [],                # List[Dict] — {chunk_index, x, y, text}
-    "pca_variance": [0.0, 0.0],     # Explained variance ratio for PC1, PC2
-    # Cached vectorstore — reused across all queries, reset only on new upload
+    "interview_qna": None,
+    "upskill_recommended": None,
+    "upskill_plan": None,
+    "upskill_selected_skill": "",
+    "resume_chunks": [],
+    "pca_coords": [],
+    "pca_variance": [0.0, 0.0],
     "vectorstore": None,
-    # Indices + scores of chunks retrieved in the last chat query (for sidebar highlight)
-    "last_retrieved": [],            # List[Dict] — {chunk_index, dense, bm25, hybrid}
-    # Groq key tracking — only recreate client when key actually changes
+    "last_retrieved": [],
     "_active_groq_key": "",
-    # ── Make My Resume builder ────────────────────────────────────────────────
     "maker_data": {
         "name": "", "email": "", "phone": "",
         "linkedin": "", "github": "", "location": "",
@@ -105,21 +93,15 @@ _DEFAULTS = {
         "achievements": "",
     },
     "maker_pdf_bytes": None,
-    # ── Semantic Job Matching ─────────────────────────────────────────────────
-    "job_match_results": [],     # List[Dict] — jobs with match_score added
-    "job_match_query": "",       # last search query
-    # ── Cached resume embedding (computed once on upload, reused across features) ─
-    "resume_embedding": None,    # numpy array shape (384,) from BGE-small
+    "job_match_results": [],
+    "job_match_query": "",
+    "resume_embedding": None,
 }
 for k, v in _DEFAULTS.items():
     st.session_state.setdefault(k, v)
 
-# ── Supabase auth session state ───────────────────────────────────────────────────
-for _k, _v in {
-    "supabase_user_id": "",
-    "supabase_access_token": "",
-    "supabase_email": "",
-}.items():
+# ── Supabase auth state ───────────────────────────────────────────────────────
+for _k, _v in {"supabase_user_id": "", "supabase_access_token": "", "supabase_email": ""}.items():
     st.session_state.setdefault(_k, _v)
 
 
@@ -127,7 +109,7 @@ def _get_supabase_anon():
     return create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_ANON_KEY"])
 
 
-def _show_auth_page():
+def _show_auth_page() -> None:
     st.markdown(
         '<h1 style="font-family:Inter,sans-serif;font-weight:700;color:#1a1a2e;">🎯 PrepSense AI</h1>',
         unsafe_allow_html=True,
@@ -144,7 +126,7 @@ def _show_auth_page():
             try:
                 sb  = _get_supabase_anon()
                 res = sb.auth.sign_in_with_password({"email": email, "password": password})
-                st.session_state.supabase_user_id     = res.user.id
+                st.session_state.supabase_user_id      = res.user.id
                 st.session_state.supabase_access_token = res.session.access_token
                 st.session_state.supabase_email        = res.user.email
                 st.rerun()
@@ -170,7 +152,7 @@ if not st.session_state.supabase_user_id:
     _show_auth_page()
     st.stop()
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────────
+# ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown(
         '<p style="font-family:Inter,sans-serif;font-weight:700;font-size:1.2rem;'
@@ -213,30 +195,27 @@ with st.sidebar:
 
     if st.session_state.resume_text:
         wc = len(st.session_state.resume_text.split())
-        st.markdown(f'<p style="font-size:0.88rem;color:#1a7a45;font-weight:500;">✓ Resume loaded ({wc} words)</p>', unsafe_allow_html=True)
+        st.markdown(f'<p class="label-text text-ok">✓ Resume loaded ({wc} words)</p>', unsafe_allow_html=True)
         if st.session_state.resume_indexed:
-            st.markdown('<p style="font-size:0.88rem;color:#1a7a45;font-weight:500;">✓ RAG index ready</p>', unsafe_allow_html=True)
+            st.markdown('<p class="label-text text-ok">✓ RAG index ready</p>', unsafe_allow_html=True)
         else:
-            st.markdown('<p style="font-size:0.88rem;color:#e67e22;">⏳ Indexing…</p>', unsafe_allow_html=True)
+            st.markdown('<p class="label-text text-warn">⏳ Indexing…</p>', unsafe_allow_html=True)
     else:
-        st.markdown('<p style="font-size:0.88rem;color:#8890a4;">○ No resume uploaded</p>', unsafe_allow_html=True)
+        st.markdown('<p class="label-text text-muted">○ No resume uploaded</p>', unsafe_allow_html=True)
 
-    summary = st.session_state.session_summary
-    if summary:
+    if st.session_state.session_summary:
         st.divider()
         st.markdown('<p class="section-label">🧠 Session Memory</p>', unsafe_allow_html=True)
-        preview = summary[:200] + ("…" if len(summary) > 200 else "")
-        st.markdown(f'<p style="font-size:0.78rem;color:#8890a4;line-height:1.5;">{preview}</p>', unsafe_allow_html=True)
+        _preview = st.session_state.session_summary[:200] + ("…" if len(st.session_state.session_summary) > 200 else "")
+        st.markdown(f'<p class="meta-text">{_preview}</p>', unsafe_allow_html=True)
 
     _chunks = st.session_state.resume_chunks
     if _chunks:
         st.divider()
         st.markdown('<p class="section-label">📄 Resume Chunks</p>', unsafe_allow_html=True)
 
-        # Build a lookup from last retrieved indices → scores for highlighting
         _retrieved_map: dict[int, dict] = {
-            r["chunk_index"]: r
-            for r in st.session_state.last_retrieved
+            r["chunk_index"]: r for r in st.session_state.last_retrieved
         }
         _n_retrieved = len(_retrieved_map)
         if _n_retrieved:
@@ -245,38 +224,35 @@ with st.sidebar:
         with st.expander(f"View all {len(_chunks)} indexed chunks", expanded=False):
             st.caption(f"{len(_chunks)} chunks · BGE-small + BM25 hybrid index")
             for _c in sorted(_chunks, key=lambda x: x["chunk_index"]):
-                _idx  = _c["chunk_index"]
-                _hit  = _retrieved_map.get(_idx)
-                _border_color = "#27ae60" if _hit else "#e0e4f0"
-                _label_color  = "#27ae60" if _hit else "#3452c7"
-                _badge        = " ✦ retrieved" if _hit else ""
+                _idx   = _c["chunk_index"]
+                _hit   = _retrieved_map.get(_idx)
+                _bc    = "#27ae60" if _hit else "#e0e4f0"
+                _lc    = "#27ae60" if _hit else "#3452c7"
+                _badge = " ✦ retrieved" if _hit else ""
 
                 st.markdown(
-                    f'<p style="font-size:0.72rem;font-weight:600;color:{_label_color};margin:4px 0 2px;">'
+                    f'<p style="font-size:0.72rem;font-weight:600;color:{_lc};margin:4px 0 2px;">'
                     f'Chunk #{_idx}{_badge}</p>',
                     unsafe_allow_html=True,
                 )
                 st.markdown(
                     f'<p style="font-size:0.72rem;color:#555;line-height:1.5;margin:0 0 4px;'
-                    f'border-left:3px solid {_border_color};padding-left:8px;">'
+                    f'border-left:3px solid {_bc};padding-left:8px;">'
                     f'{_c["text"][:280]}{"…" if len(_c["text"]) > 280 else ""}</p>',
                     unsafe_allow_html=True,
                 )
-
-                # Score bars — only for retrieved chunks
                 if _hit:
                     _d = _hit["dense_score"]
                     _b = _hit["bm25_score"]
                     _h = _hit["hybrid_score"]
                     st.markdown(
-                        f'<div style="font-size:0.68rem;color:#555;margin:0 0 2px 10px;line-height:1.8;">'
+                        f'<div class="chunk-scores">'
                         f'<span style="color:#3452c7;">■</span> Dense&nbsp;<b>{_d:.2f}</b>&nbsp;&nbsp;'
                         f'<span style="color:#e67e22;">■</span> BM25&nbsp;<b>{_b:.2f}</b>&nbsp;&nbsp;'
                         f'<span style="color:#27ae60;">■</span> Hybrid&nbsp;<b>{_h:.2f}</b>'
                         f'</div>',
                         unsafe_allow_html=True,
                     )
-                    # Mini score bar
                     st.markdown(
                         f'<div style="display:flex;gap:3px;margin:0 0 10px 10px;height:5px;">'
                         f'<div style="width:{int(_d*80)}px;background:#3452c7;border-radius:2px;"></div>'
@@ -288,14 +264,14 @@ with st.sidebar:
                 else:
                     st.markdown('<div style="margin-bottom:8px;"></div>', unsafe_allow_html=True)
 
-# ── Header ────────────────────────────────────────────────────────────────────────
+# ── Header ────────────────────────────────────────────────────────────────────
 st.markdown('<h1 class="brand">Prep<span>Sense</span> AI</h1>', unsafe_allow_html=True)
 st.markdown('<p class="sub">ATS Scorer · Bullet Rewriter · RAG Chat · Powered by Groq</p>', unsafe_allow_html=True)
 st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
 
-# ── API Key ───────────────────────────────────────────────────────────────────────
-_env_key           = os.getenv("GROQ_API_KEY", "").strip()
-_github_client_id  = os.getenv("GITHUB_CLIENT_ID", "").strip()
+# ── Groq API Key ──────────────────────────────────────────────────────────────
+_env_key              = os.getenv("GROQ_API_KEY", "").strip()
+_github_client_id     = os.getenv("GITHUB_CLIENT_ID", "").strip()
 _github_client_secret = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 
 if _env_key:
@@ -317,30 +293,32 @@ else:
             st.warning("Required", icon="🔑")
 
 if active_key != st.session_state._active_groq_key:
-    st.session_state.groq_client   = Groq(api_key=active_key) if active_key else None
+    st.session_state.groq_client      = Groq(api_key=active_key) if active_key else None
     st.session_state._active_groq_key = active_key
+
 st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
 
-# ── File Upload ───────────────────────────────────────────────────────────────────
+# ── File Upload ───────────────────────────────────────────────────────────────
 col_up, col_info = st.columns([3, 2])
 
 with col_up:
     uploaded_file = st.file_uploader("Drop your resume here (PDF or DOCX)", type=["pdf", "docx"])
 
 with col_info:
-    st.markdown("""
-<div class="card-blue">
-  <div class="section-label">How it works</div>
-  <p style="font-size:0.88rem;color:#3452c7;line-height:1.8;margin:0;">
-    1️⃣ Upload PDF or DOCX<br>
-    2️⃣ Auto-chunked → embedded → Chroma RAG<br>
-    3️⃣ Run ATS analysis or bullet rewrites<br>
-    4️⃣ Chat with your resume via RAG context
-  </p>
-</div>
-""", unsafe_allow_html=True)
+    st.markdown(
+        '<div class="card-blue">'
+        '<div class="section-label">How it works</div>'
+        '<p class="body-text text-primary" style="line-height:1.8;margin:0;">'
+        '1️⃣ Upload PDF or DOCX<br>'
+        '2️⃣ Auto-chunked → embedded → Chroma RAG<br>'
+        '3️⃣ Run ATS analysis or bullet rewrites<br>'
+        '4️⃣ Chat with your resume via RAG context'
+        '</p>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
-# ── Process upload ────────────────────────────────────────────────────────────────
+# ── Process upload ────────────────────────────────────────────────────────────
 if uploaded_file and uploaded_file.name != st.session_state.loaded_filename:
     with st.spinner("📄 Parsing resume…"):
         try:
@@ -350,30 +328,30 @@ if uploaded_file and uploaded_file.name != st.session_state.loaded_filename:
             st.stop()
 
     st.session_state.update({
-        "resume_text": text,
-        "loaded_filename": uploaded_file.name,
-        "ats_result": None,
-        "ats_result_prev": None,
-        "bullets_result": None,
-        "resume_structure": None,
-        "resume_pdf_bytes": None,
-        "jd_tailor_result": None,
-        "cover_letter": None,
-        "tailored_pdf_bytes": None,
-        "skill_gap_result": None,
-        "resume_indexed": False,
-        "resume_chunks": [],
-        "pca_coords": [],
-        "pca_variance": [0.0, 0.0],
-        "vectorstore": None,
-        "last_retrieved": [],
-        "chat_history": [],
-        "session_summary": "",
-        "interview_qna": None,
-        "upskill_recommended": None,
-        "upskill_plan": None,
+        "resume_text":          text,
+        "loaded_filename":      uploaded_file.name,
+        "ats_result":           None,
+        "ats_result_prev":      None,
+        "bullets_result":       None,
+        "resume_structure":     None,
+        "resume_pdf_bytes":     None,
+        "jd_tailor_result":     None,
+        "cover_letter":         None,
+        "tailored_pdf_bytes":   None,
+        "skill_gap_result":     None,
+        "resume_indexed":       False,
+        "resume_chunks":        [],
+        "pca_coords":           [],
+        "pca_variance":         [0.0, 0.0],
+        "vectorstore":          None,
+        "last_retrieved":       [],
+        "chat_history":         [],
+        "session_summary":      "",
+        "interview_qna":        None,
+        "upskill_recommended":  None,
+        "upskill_plan":         None,
         "upskill_selected_skill": "",
-        "resume_embedding": None,   # cleared; recomputed below
+        "resume_embedding":     None,
     })
 
     with st.spinner("🗂️ Building RAG index…"):
@@ -391,1948 +369,80 @@ if uploaded_file and uploaded_file.name != st.session_state.loaded_filename:
             _corpus, _vectors = [], []
 
     if st.session_state.resume_indexed:
-        # ── Step 1: cache corpus for BM25 hybrid retrieval ─────────────────────
-        st.session_state.vectorstore    = _corpus   # reused as BM25 corpus
-        st.session_state.resume_chunks  = [
+        st.session_state.vectorstore   = _corpus
+        st.session_state.resume_chunks = [
             {"chunk_index": c["chunk_index"], "text": c["text"]} for c in _corpus
         ]
 
-        # ── Step 2: PCA — use vectors returned by ingest (already computed) ────
+        # PCA from ingest vectors
         _docs = [c["text"] for c in _corpus]
         if len(_docs) >= 2:
             try:
                 import numpy as np
                 from sklearn.decomposition import PCA
-
                 _arr = np.array(_vectors, dtype=float)
                 _pca = PCA(n_components=2)
                 _xy  = _pca.fit_transform(_arr)
                 st.session_state.pca_coords = [
-                    {
-                        "chunk_index": _corpus[i]["chunk_index"],
-                        "x":    float(_xy[i, 0]),
-                        "y":    float(_xy[i, 1]),
-                        "text": _docs[i][:120],
-                    }
+                    {"chunk_index": _corpus[i]["chunk_index"],
+                     "x": float(_xy[i, 0]), "y": float(_xy[i, 1]),
+                     "text": _docs[i][:120]}
                     for i in range(len(_docs))
                 ]
                 st.session_state.pca_variance = _pca.explained_variance_ratio_.tolist()
             except Exception as _e:
                 st.warning(f"PCA computation failed: {_e}")
 
-        # ── Step 3: Pre-compute resume embedding (reused by ATS + Job Match) ───
+        # Pre-compute resume embedding (reused by ATS + Job Match + Chat)
         try:
-            import numpy as np
             from utils.embed_cache import get_bge_model as _get_bge
             st.session_state.resume_embedding = _get_bge().encode(
                 text[:4000], normalize_embeddings=True, show_progress_bar=False
             )
         except Exception:
-            pass   # non-fatal — features fall back to encoding on demand
+            pass  # non-fatal — features fall back to encoding on demand
 
         st.success(f"✓ **{uploaded_file.name}** parsed & indexed", icon="🗂️")
         st.rerun()
 
 st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
 
-# ── Tabs ──────────────────────────────────────────────────────────────────────────
-tab_ats, tab_bullets, tab_jd, tab_chat, tab_portfolio, tab_interview, tab_raw, tab_maker, tab_jobs = st.tabs([
-    "🏆  ATS Score", "✍️  Bullet Rewriter", "🎯  JD Tailor", "💬  Resume Chat", "🌐  Portfolio", "🎓  Interview Prep", "📄  Raw Text", "🛠️  Make My Resume", "🔍  Job Match"
+# ── Tabs ──────────────────────────────────────────────────────────────────────
+(
+    _tab_ats, _tab_bullets, _tab_jd, _tab_chat,
+    _tab_portfolio, _tab_interview, _tab_raw, _tab_maker, _tab_jobs,
+) = st.tabs([
+    "🏆  ATS Score", "✍️  Bullet Rewriter", "🎯  JD Tailor", "💬  Resume Chat",
+    "🌐  Portfolio", "🎓  Interview Prep", "📄  Raw Text", "🛠️  Make My Resume", "🔍  Job Match",
 ])
 
-# ─────────────────────────────────────────────────────────────────────────────────
-# TAB 1 — ATS Analysis
-# ─────────────────────────────────────────────────────────────────────────────────
-with tab_ats:
-    if not st.session_state.resume_text:
-        st.info("Upload a resume above to run ATS analysis.", icon="👆")
-    else:
-        # ── JD input ──────────────────────────────────────────────────────────
-        with st.expander("📋  Paste a Job Description for precise scoring (recommended)", expanded=False):
-            st.markdown(
-                '<p style="font-size:0.85rem;color:#4a4e6a;margin-bottom:6px;">'
-                'Without a JD the scorer uses generic role keywords. With a JD it matches '
-                'exact requirements — scores will be more accurate and actionable.</p>',
-                unsafe_allow_html=True,
-            )
-            jd_input = st.text_area(
-                "Job Description",
-                value=st.session_state.jd_text,
-                height=200,
-                placeholder="Paste the full job description here…",
-                label_visibility="collapsed",
-            )
-            if jd_input != st.session_state.jd_text:
-                st.session_state.jd_text = jd_input
+with _tab_ats:
+    tab_ats_mod.render(target_role)
 
-        jd_badge = "🎯 JD-matched" if st.session_state.jd_text.strip() else "🔎 Role-based"
-        if st.button(f"▶  Run ATS Analysis  ({jd_badge})", key="run_ats"):
-            if not st.session_state.groq_client:
-                st.error("Please provide a Groq API key first.")
-            else:
-                # Save previous result for delta comparison
-                if st.session_state.ats_result:
-                    st.session_state.ats_result_prev = st.session_state.ats_result
+with _tab_bullets:
+    tab_bullets_mod.render(target_role)
 
-                with st.spinner(f"Analysing for **{target_role}**…"):
-                    st.session_state.ats_result = analyze_ats(
-                        st.session_state.resume_text,
-                        target_role,
-                        st.session_state.groq_client,
-                        jd_text=st.session_state.jd_text,
-                        model=st.session_state.groq_model,
-                        resume_embedding=st.session_state.resume_embedding,
-                    )
+with _tab_jd:
+    tab_jd_mod.render(target_role)
 
-                if st.session_state.jd_text.strip() and st.session_state.ats_result:
-                    with st.spinner("📊  Mapping skill gap radar…"):
-                        st.session_state.skill_gap_result = analyze_skill_gap(
-                            st.session_state.ats_result.get("matched_keywords", []),
-                            st.session_state.ats_result.get("missing_keywords", []),
-                            target_role,
-                            st.session_state.groq_client,
-                            model=st.session_state.groq_model,
-                        )
+with _tab_chat:
+    tab_chat_mod.render(target_role, rapidapi_key=st.session_state.rapidapi_key)
 
-        # ── Model Comparison Mode ─────────────────────────────────────────────
-        with st.expander("⚖️  Compare two models side-by-side", expanded=False):
-            if not st.session_state.resume_text:
-                st.caption("Upload a resume first.")
-            else:
-                _CMP_MODELS = {
-                    "GPT-OSS 120B": "openai/gpt-oss-120b",
-                    "Llama 3.3 70B": "llama-3.3-70b-versatile",
-                    "Llama 3.1 8B (fast)": "llama-3.1-8b-instant",
-                    "Gemma 2 9B": "gemma2-9b-it",
-                }
-                _c1, _c2 = st.columns(2)
-                with _c1:
-                    _m1_name = st.selectbox("Model A", list(_CMP_MODELS.keys()), index=0, key="cmp_m1")
-                with _c2:
-                    _m2_name = st.selectbox("Model B", list(_CMP_MODELS.keys()), index=1, key="cmp_m2")
-
-                if st.button("▶  Run Comparison", key="run_comparison"):
-                    if not st.session_state.groq_client:
-                        st.error("Groq API key required.")
-                    else:
-                        _m1_id = _CMP_MODELS[_m1_name]
-                        _m2_id = _CMP_MODELS[_m2_name]
-                        with st.spinner(f"Running {_m1_name} vs {_m2_name}…"):
-                            _r1 = analyze_ats(
-                                st.session_state.resume_text,
-                                target_role,
-                                st.session_state.groq_client,
-                                jd_text=st.session_state.jd_text,
-                                model=_m1_id,
-                                resume_embedding=st.session_state.resume_embedding,
-                            )
-                            _r2 = analyze_ats(
-                                st.session_state.resume_text,
-                                target_role,
-                                st.session_state.groq_client,
-                                jd_text=st.session_state.jd_text,
-                                model=_m2_id,
-                                resume_embedding=st.session_state.resume_embedding,
-                            )
-
-                        _col1, _col2 = st.columns(2)
-                        for _col, _res, _mname in [(_col1, _r1, _m1_name), (_col2, _r2, _m2_name)]:
-                            with _col:
-                                _sc = max(0, min(100, _res.get("ats_score", 0)))
-                                _clr = "#27ae60" if _sc >= 70 else "#e67e22" if _sc >= 45 else "#e74c3c"
-                                st.markdown(
-                                    f"**{_mname}**  \n"
-                                    f'<span style="font-size:2rem;font-weight:700;color:{_clr};">{_sc}</span>/100',
-                                    unsafe_allow_html=True,
-                                )
-                                st.caption("**Strong areas:** " + "; ".join(_res.get("strong_areas", [])[:3]))
-                                st.caption("**Weak areas:** " + "; ".join(_res.get("weak_areas", [])[:3]))
-                                st.caption("**Summary:** " + _res.get("summary", "—"))
-
-        if r := st.session_state.ats_result:
-            prev = st.session_state.ats_result_prev
-            score = max(0, min(100, r["ats_score"]))
-
-            if score >= 70:
-                color, band = "#27ae60", "Strong match"
-            elif score >= 45:
-                color, band = "#e67e22", "Moderate match"
-            else:
-                color, band = "#e74c3c", "Weak match"
-
-            bg = "#e8f8ef" if score >= 70 else "#fef3e8" if score >= 45 else "#fef0f0"
-
-            # ── Main score gauge — split into columns to avoid HTML parser issues ──
-            g_col, t_col = st.columns([1, 5])
-            with g_col:
-                st.markdown(
-                    f'<div style="width:90px;height:90px;border-radius:50%;'
-                    f'background:conic-gradient({color} {score}%,#eef0f7 0);'
-                    f'display:flex;align-items:center;justify-content:center;">'
-                    f'<div style="width:68px;height:68px;border-radius:50%;background:#fff;'
-                    f'display:flex;align-items:center;justify-content:center;'
-                    f'font-size:1.35rem;font-weight:700;color:{color};">{score}</div></div>',
-                    unsafe_allow_html=True,
-                )
-            with t_col:
-                jd_badge = " · JD-matched" if r.get("used_jd") else ""
-                st.markdown(
-                    f'<div style="padding-top:0.6rem;font-size:1.05rem;font-weight:700;color:#1a1a2e;">'
-                    f'ATS Score'
-                    f'<span style="font-size:0.8rem;font-weight:600;background:{bg};color:{color};'
-                    f'padding:2px 10px;border-radius:100px;margin-left:8px;">{band}{jd_badge}</span>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-                # Summary in its own call — LLM text never touches the badge HTML
-                st.caption(r["summary"])
-            st.progress(score / 100)
-
-            # ── Embedding similarity metrics (model-computed, zero LLM) ────────
-            sim_metrics = r.get("similarity_metrics", {})
-            if sim_metrics and sim_metrics.get("cosine", -1.0) >= 0:
-                st.markdown(
-                    '<div class="section-label" style="margin:0.7rem 0 0.4rem;">'
-                    '🤖 Embedding Similarity Metrics'
-                    '<span style="font-size:0.72rem;font-weight:400;color:#aab0c4;margin-left:8px;">'
-                    'BAAI/bge-small-en-v1.5 · no LLM involved</span></div>',
-                    unsafe_allow_html=True,
-                )
-
-                _metric_defs = [
-                    ("Cosine",     "cos(θ) = A·B — angle between vectors; magnitude-independent.",               sim_metrics.get("cosine",    0.0)),
-                    ("Euclidean",  "1 − d/2 where d=‖A−B‖₂.  Distance in embedding space → similarity.",        sim_metrics.get("euclidean", 0.0)),
-                    ("Manhattan",  "L1 norm similarity.  Less dominated by large individual dimensions than L2.", sim_metrics.get("manhattan", 0.0)),
-                    ("Pearson",    "Mean-centred cosine — corr(A−Ā, B−B̄).  Co-variance of embedding dims.",     sim_metrics.get("pearson",   0.0)),
-                ]
-
-                sim_cols = st.columns(4)
-                for col, (label, tooltip, val) in zip(sim_cols, _metric_defs):
-                    if val >= 0.60:
-                        c = "#27ae60"
-                    elif val >= 0.40:
-                        c = "#e67e22"
-                    else:
-                        c = "#e74c3c"
-                    col.markdown(
-                        f'<div style="padding:12px 14px;border-radius:10px;background:#f8f9fc;'
-                        f'border:1px solid #e0e4f0;text-align:center;">'
-                        f'<div style="font-size:0.75rem;color:#8890a4;font-weight:500;margin-bottom:4px;">{label}</div>'
-                        f'<div style="font-size:1.4rem;font-weight:800;color:{c};">{val:.3f}</div>'
-                        f'</div>',
-                        unsafe_allow_html=True,
-                    )
-                    col.caption(tooltip)
-
-            st.write("")
-
-            # ── Sub-score breakdown ────────────────────────────────────────────
-            st.markdown('<div class="section-label" style="margin-bottom:0.6rem;">Score Breakdown</div>', unsafe_allow_html=True)
-
-            prev_keys = [
-                "keyword_score", "quantification_score",
-                "action_verb_score", "section_score", "formatting_score",
-            ]
-            sub_scores = [
-                ("🔑 Keyword Match",    "wt 50%", r["keyword_score"],        prev_keys[0]),
-                ("⚡ Action Verbs",     "wt 20%", r["action_verb_score"],     prev_keys[2]),
-                ("📊 Quantification",   "wt 15%", r["quantification_score"], prev_keys[1]),
-                ("📋 Sections",         "wt 10%", r["section_score"],         prev_keys[3]),
-                ("🧹 ATS Format",        "wt 5%", r["formatting_score"],      prev_keys[4]),
-            ]
-
-            # Row of metrics (st.metric handles delta natively — no raw HTML needed)
-            metric_cols = st.columns(5)
-            for col, (label, wt_label, val, pkey) in zip(metric_cols, sub_scores):
-                delta = None
-                if prev and prev.get(pkey) is not None:
-                    diff = val - prev[pkey]
-                    delta = diff if diff != 0 else None
-                col.metric(label=f"{label}\n{wt_label}", value=val, delta=delta)
-
-            # Progress bars — one flat div per score, no nested spans
-            bar_html = ""
-            for _, _, val, _ in sub_scores:
-                bar_color = "#27ae60" if val >= 70 else "#e67e22" if val >= 45 else "#e74c3c"
-                bar_html += (
-                    f'<div style="flex:1;background:#eef0f7;border-radius:4px;height:7px;margin:0 3px;">'
-                    f'<div style="background:{bar_color};width:{val}%;height:7px;border-radius:4px;"></div>'
-                    f'</div>'
-                )
-            st.markdown(
-                f'<div style="display:flex;gap:0;margin-top:-0.6rem;margin-bottom:0.4rem;">{bar_html}</div>',
-                unsafe_allow_html=True,
-            )
-
-            # Quantification detail line
-            if r.get("quant_detail"):
-                st.markdown(
-                    f'<p style="font-size:0.8rem;color:#8890a4;margin-top:0.2rem;">'
-                    f'Quantification detail: {r["quant_detail"]}</p>',
-                    unsafe_allow_html=True,
-                )
-
-            if prev:
-                prev_total = prev.get("ats_score", score)
-                total_diff = score - prev_total
-                if total_diff != 0:
-                    d_color = "#27ae60" if total_diff > 0 else "#e74c3c"
-                    d_sign  = "+" if total_diff > 0 else ""
-                    st.markdown(
-                        f'<p style="font-size:0.85rem;color:{d_color};font-weight:600;">'
-                        f'vs previous run: {d_sign}{total_diff} pts overall</p>',
-                        unsafe_allow_html=True,
-                    )
-
-            st.write("")
-
-            # ── Keywords ───────────────────────────────────────────────────────
-            col_matched, col_missing = st.columns(2)
-            with col_matched:
-                st.markdown(
-                    f'<div class="card"><div class="section-label">✅ Matched Keywords '
-                    f'<span style="color:#27ae60;">({len(r["matched_keywords"])})</span></div>',
-                    unsafe_allow_html=True,
-                )
-                if r["matched_keywords"]:
-                    chips = "".join(f'<span class="chip chip-green">{k}</span>' for k in r["matched_keywords"])
-                    st.markdown(f'<div class="chips">{chips}</div>', unsafe_allow_html=True)
-                else:
-                    st.markdown('<p style="font-size:0.88rem;color:#8890a4;">None detected.</p>', unsafe_allow_html=True)
-                st.markdown("</div>", unsafe_allow_html=True)
-
-            with col_missing:
-                st.markdown(
-                    f'<div class="card"><div class="section-label">❌ Missing Keywords '
-                    f'<span style="color:#e74c3c;">({len(r["missing_keywords"])})</span></div>',
-                    unsafe_allow_html=True,
-                )
-                if r["missing_keywords"]:
-                    chips = "".join(f'<span class="chip chip-red">{k}</span>' for k in r["missing_keywords"])
-                    st.markdown(f'<div class="chips">{chips}</div>', unsafe_allow_html=True)
-                else:
-                    st.markdown('<p style="font-size:0.88rem;color:#27ae60;font-weight:500;">Full coverage — none missing!</p>', unsafe_allow_html=True)
-                st.markdown("</div>", unsafe_allow_html=True)
-
-            # ── KeyBERT keyword extraction (no LLM) ───────────────────────────
-            kb_resume = r.get("keybert_resume_kws", [])
-            kb_jd     = r.get("keybert_jd_kws", [])
-            kb_overlap = r.get("keybert_overlap", [])
-            if kb_resume:
-                st.write("")
-                st.markdown(
-                    '<div class="section-label" style="margin-bottom:0.4rem;">'
-                    '🔬 KeyBERT Keyword Extraction'
-                    '<span style="font-size:0.72rem;font-weight:400;color:#aab0c4;margin-left:8px;">'
-                    'BERT embeddings + MMR · zero LLM</span></div>',
-                    unsafe_allow_html=True,
-                )
-                kb_cols = st.columns(2) if kb_jd else [st.container()]
-                with kb_cols[0]:
-                    st.markdown(
-                        f'<div class="card"><div class="section-label">📄 Resume Keywords ({len(kb_resume)})</div>',
-                        unsafe_allow_html=True,
-                    )
-                    chips = "".join(f'<span class="chip chip-green">{k}</span>' for k in kb_resume)
-                    st.markdown(f'<div class="chips">{chips}</div>', unsafe_allow_html=True)
-                    st.markdown("</div>", unsafe_allow_html=True)
-                if kb_jd:
-                    with kb_cols[1]:
-                        st.markdown(
-                            f'<div class="card"><div class="section-label">📋 JD Keywords ({len(kb_jd)})</div>',
-                            unsafe_allow_html=True,
-                        )
-                        for kw in kb_jd:
-                            color = "chip-green" if kw in kb_overlap else "chip-red"
-                            st.markdown(
-                                f'<span class="chip {color}">{kw}</span>',
-                                unsafe_allow_html=True,
-                            )
-                        st.markdown("</div>", unsafe_allow_html=True)
-                    if kb_overlap:
-                        st.caption(f"✅ {len(kb_overlap)} of {len(kb_jd)} JD keywords found in your resume by KeyBERT")
-                    else:
-                        st.caption("❌ No JD keywords matched in resume by KeyBERT")
-
-            # ── Strong / Weak areas ────────────────────────────────────────────
-            col_strong, col_weak = st.columns(2)
-            with col_strong:
-                st.markdown('<div class="card"><div class="section-label">💪 Strong Areas</div>', unsafe_allow_html=True)
-                for item in r["strong_areas"]:
-                    st.markdown(f'<p style="font-size:0.92rem;color:#1a4a2e;margin:4px 0;">▸ {item}</p>', unsafe_allow_html=True)
-                st.markdown("</div>", unsafe_allow_html=True)
-
-            with col_weak:
-                st.markdown('<div class="card"><div class="section-label">⚠️ Weak Areas / Gaps</div>', unsafe_allow_html=True)
-                for item in r["weak_areas"]:
-                    st.markdown(f'<p style="font-size:0.92rem;color:#7a2020;margin:4px 0;">▸ {item}</p>', unsafe_allow_html=True)
-                st.markdown("</div>", unsafe_allow_html=True)
-
-            # ── Skill Gap Radar ────────────────────────────────────────────────
-            st.write("")
-            st.markdown(
-                '<div class="section-label" style="margin-bottom:0.5rem;">📊 Skill Gap Radar</div>',
-                unsafe_allow_html=True,
-            )
-
-            if not r.get("used_jd"):
-                st.info(
-                    "Paste a Job Description above and re-run ATS analysis to see your personalised skill gap radar chart.",
-                    icon="💡",
-                )
-            else:
-                sg = st.session_state.skill_gap_result
-                if sg and sg.get("categories"):
-                    import plotly.graph_objects as go
-
-                    cats     = sg["categories"]
-                    r_scores = sg["resume_scores"]
-                    j_scores = sg["jd_scores"]
-
-                    # Close the polygon loop for radar
-                    cats_loop  = cats     + [cats[0]]
-                    r_loop     = r_scores + [r_scores[0]]
-                    j_loop     = j_scores + [j_scores[0]]
-
-                    fig = go.Figure()
-
-                    # JD Required — solid orange, strong fill drawn first (background layer)
-                    fig.add_trace(go.Scatterpolar(
-                        r=j_loop,
-                        theta=cats_loop,
-                        fill="toself",
-                        fillcolor="rgba(230, 126, 34, 0.35)",
-                        line=dict(color="#e67e22", width=3),
-                        name="JD Required",
-                    ))
-
-                    # Your Resume — solid teal, strong fill drawn on top
-                    fig.add_trace(go.Scatterpolar(
-                        r=r_loop,
-                        theta=cats_loop,
-                        fill="toself",
-                        fillcolor="rgba(26, 188, 156, 0.45)",
-                        line=dict(color="#1abc9c", width=3),
-                        name="Your Resume",
-                    ))
-
-                    fig.update_layout(
-                        polar=dict(
-                            bgcolor="rgba(248, 249, 252, 1)",
-                            radialaxis=dict(
-                                visible=True,
-                                range=[0, 10],
-                                tickvals=[2, 4, 6, 8, 10],
-                                tickfont=dict(size=10, color="#555"),
-                                gridcolor="#d8dce8",
-                                linecolor="#d8dce8",
-                            ),
-                            angularaxis=dict(
-                                tickfont=dict(size=12, color="#1a1a2e"),
-                                linecolor="#d8dce8",
-                                gridcolor="#d8dce8",
-                            ),
-                        ),
-                        showlegend=True,
-                        legend=dict(
-                            orientation="h",
-                            yanchor="bottom", y=1.06,
-                            xanchor="center", x=0.5,
-                            font=dict(size=13),
-                        ),
-                        margin=dict(l=50, r=50, t=70, b=30),
-                        paper_bgcolor="rgba(0,0,0,0)",
-                        plot_bgcolor="rgba(0,0,0,0)",
-                        height=440,
-                    )
-                    st.plotly_chart(fig, width='stretch')
-                    st.caption(
-                        "Teal = your resume coverage · Orange = JD requirement level · Scale 0–10 per category · Gap between shapes = areas to improve"
-                    )
-                else:
-                    err = sg.get("error") if sg else None
-                    if err:
-                        st.warning(f"Skill gap agent error: {err}", icon="⚠️")
-                    else:
-                        st.info("Skill gap data unavailable — re-run ATS with a job description.", icon="💡")
-
-# ─────────────────────────────────────────────────────────────────────────────────
-# TAB 2 — Bullet Rewriter + PDF Resume Builder
-# ─────────────────────────────────────────────────────────────────────────────────
-with tab_bullets:
-    if not st.session_state.resume_text:
-        st.info("Upload a resume above to rewrite bullet points.", icon="👆")
-    else:
-        st.markdown("""
-<div class="card-blue" style="margin-bottom:1rem;">
-  <div class="section-label">AI Bullet Rewriter + PDF Resume Generator</div>
-  <p style="font-size:0.9rem;color:#3452c7;line-height:1.65;margin:0;">
-    Rewrites your weakest bullets with strong action verbs &amp; metrics,
-    then rebuilds your entire resume as a clean, ATS-friendly PDF — ready to download.
-  </p>
-</div>
-""", unsafe_allow_html=True)
-
-        # Show ATS keyword context banner if ATS has already run with a JD
-        _ats_missing = (
-            (st.session_state.ats_result or {}).get("missing_keywords") or []
-            if st.session_state.ats_result and st.session_state.ats_result.get("used_jd")
-            else []
-        )
-        if _ats_missing:
-            _kw_chips = "".join(
-                f'<span class="chip chip-green">{k}</span>' for k in _ats_missing[:15]
-            )
-            st.markdown(
-                f'<div style="background:#e8f5e9;border:1px solid #a5d6a7;border-radius:8px;'
-                f'padding:10px 14px;margin-bottom:0.8rem;font-size:0.85rem;color:#1a7a45;">'
-                f'<strong>ATS mode active</strong> — rewriter will target these {len(_ats_missing)} '
-                f'missing keywords from your last ATS scan:<br><div class="chips" style="margin-top:6px;">'
-                f'{_kw_chips}</div>'
-                f'<span style="font-size:0.78rem;color:#4a7a5a;">Run ATS Score again after downloading '
-                f'the rewritten PDF to see your improved score.</span></div>',
-                unsafe_allow_html=True,
-            )
-
-        if st.button("▶  Rewrite Bullets & Build PDF Resume", key="run_bullets"):
-            if not st.session_state.groq_client:
-                st.error("Please provide a Groq API key first.")
-            else:
-                # Step 1 — rewrite bullets (structured JSON)
-                with st.spinner("✍️  Rewriting weak bullets with strong action verbs & metrics…"):
-                    pairs = rewrite_bullets(
-                        st.session_state.resume_text,
-                        target_role,
-                        st.session_state.groq_client,
-                        model=st.session_state.groq_model,
-                        jd_keywords=_ats_missing or None,
-                    )
-                    st.session_state.bullets_result = pairs
-
-                # Step 2 — extract resume structure
-                with st.spinner("🗂️  Parsing resume structure…"):
-                    structure = structure_resume(
-                        st.session_state.resume_text,
-                        st.session_state.groq_client,
-                        model=st.session_state.groq_model,
-                    )
-                    st.session_state.resume_structure = structure
-
-                # Step 3 — build PDF with rewritten bullets substituted in
-                with st.spinner("📄  Building your PDF resume…"):
-                    try:
-                        pdf_bytes = build_resume_pdf(structure, pairs)
-                        st.session_state.resume_pdf_bytes = pdf_bytes
-                    except Exception as e:
-                        st.error(f"PDF generation failed: {e}")
-                        st.session_state.resume_pdf_bytes = None
-
-        # ── PDF download (persists across reruns once built) ──────────────────
-        if st.session_state.resume_pdf_bytes:
-            st.success("✅ PDF resume built successfully!", icon="📄")
-            st.download_button(
-                label="⬇  Download Rewritten Resume (.pdf)",
-                data=st.session_state.resume_pdf_bytes,
-                file_name="rewritten_resume.pdf",
-                mime="application/pdf",
-                width='stretch',
-            )
-            st.write("")
-
-        # ── Before / After cards ──────────────────────────────────────────────
-        pairs = st.session_state.bullets_result
-        if pairs:
-            rewrites = [p for p in pairs if p.get("action") != "remove"]
-            removals = [p for p in pairs if p.get("action") == "remove"]
-
-            summary_parts = []
-            if rewrites:
-                summary_parts.append(f"{len(rewrites)} rewritten")
-            if removals:
-                summary_parts.append(f"{len(removals)} removed")
-            st.markdown(
-                f'<div class="section-label" style="margin-bottom:0.6rem;">'
-                f'{" · ".join(summary_parts)}</div>',
-                unsafe_allow_html=True,
-            )
-
-            for p in rewrites:
-                original = (p.get("original") or "").strip()
-                improved = (p.get("improved") or "").strip()
-                why      = (p.get("why")      or "").strip()
-                if not original:
-                    continue
-                with st.container(border=True):
-                    st.markdown("**ORIGINAL**")
-                    st.write(original)
-                    st.markdown("**IMPROVED**")
-                    st.write(improved)
-                    st.markdown("**WHY BETTER**")
-                    st.caption(why)
-
-            if removals:
-                st.markdown("**Removed — redundant / zero-value**")
-            for p in removals:
-                original = (p.get("original") or "").strip()
-                why      = (p.get("why")      or "").strip()
-                if not original:
-                    continue
-                with st.container(border=True):
-                    st.write(f"~~{original}~~")
-                    st.caption(f"Removed: {why}")
-
-# ─────────────────────────────────────────────────────────────────────────────────
-# TAB 3 — JD Tailor + Cover Letter
-# ─────────────────────────────────────────────────────────────────────────────────
-with tab_jd:
-    if not st.session_state.resume_text:
-        st.info("Upload a resume above to tailor it to a job description.", icon="👆")
-    else:
-        st.markdown("""
-<div class="card-blue" style="margin-bottom:1rem;">
-  <div class="section-label">JD Tailor + Cover Letter Generator</div>
-  <p style="font-size:0.9rem;color:#3452c7;line-height:1.65;margin:0;">
-    Paste a job description — the AI injects missing keywords into your existing bullets
-    with minimum edits, then generates a tailored cover letter and a downloadable PDF.
-  </p>
-</div>
-""", unsafe_allow_html=True)
-
-        jd_tailor_input = st.text_area(
-            "Job Description",
-            value=st.session_state.jd_text,
-            height=220,
-            placeholder="Paste the full job description here (required)…",
-        )
-        if jd_tailor_input != st.session_state.jd_text:
-            st.session_state.jd_text = jd_tailor_input
-
-        if st.button("▶  Tailor Resume & Generate Cover Letter", key="run_jd_tailor"):
-            if not st.session_state.groq_client:
-                st.error("Please provide a Groq API key first.")
-            elif not st.session_state.jd_text.strip():
-                st.warning("Paste a job description above before running.", icon="⚠️")
-            else:
-                # Step 1 — keyword injection
-                with st.spinner("🎯  Injecting missing JD keywords into your bullets…"):
-                    tailor_result = tailor_resume(
-                        st.session_state.resume_text,
-                        st.session_state.jd_text,
-                        target_role,
-                        st.session_state.groq_client,
-                        model=st.session_state.groq_model,
-                    )
-                    st.session_state.jd_tailor_result = tailor_result
-
-                # Step 2 — cover letter
-                with st.spinner("✉️  Writing cover letter…"):
-                    cl = generate_cover_letter(
-                        st.session_state.resume_text,
-                        st.session_state.jd_text,
-                        target_role,
-                        st.session_state.groq_client,
-                        model=st.session_state.groq_model,
-                    )
-                    st.session_state.cover_letter = cl
-
-                # Step 3 — build tailored PDF
-                with st.spinner("📄  Building tailored PDF resume…"):
-                    try:
-                        structure = st.session_state.resume_structure or structure_resume(
-                            st.session_state.resume_text,
-                            st.session_state.groq_client,
-                            model=st.session_state.groq_model,
-                        )
-                        st.session_state.resume_structure = structure
-                        pdf_bytes = build_resume_pdf(
-                            structure,
-                            tailor_result.get("rewrites") or [],
-                        )
-                        st.session_state.tailored_pdf_bytes = pdf_bytes
-                    except Exception as e:
-                        st.error(f"PDF generation failed: {e}")
-                        st.session_state.tailored_pdf_bytes = None
-
-        # ── Results ───────────────────────────────────────────────────────────
-        tr = st.session_state.jd_tailor_result
-        cl = st.session_state.cover_letter
-
-        if tr or cl:
-            st.write("")
-            col_dl1, col_dl2 = st.columns(2)
-
-            if st.session_state.tailored_pdf_bytes:
-                with col_dl1:
-                    st.download_button(
-                        label="⬇  Download Tailored Resume (.pdf)",
-                        data=st.session_state.tailored_pdf_bytes,
-                        file_name="tailored_resume.pdf",
-                        mime="application/pdf",
-                        width='stretch',
-                    )
-
-            if cl and not cl.startswith("Error"):
-                with col_dl2:
-                    st.download_button(
-                        label="⬇  Download Cover Letter (.txt)",
-                        data=cl.encode("utf-8"),
-                        file_name="cover_letter.txt",
-                        mime="text/plain",
-                        width='stretch',
-                    )
-
-            st.write("")
-
-            # Cover letter display
-            if cl:
-                st.markdown('<div class="section-label" style="margin-bottom:0.4rem;">✉️ Cover Letter</div>', unsafe_allow_html=True)
-                with st.container(border=True):
-                    st.write(cl)
-
-            st.write("")
-
-            # Keyword injection summary
-            if tr:
-                rewrites = tr.get("rewrites") or []
-                added    = tr.get("added_keywords") or []
-
-                st.markdown(
-                    f'<div class="section-label" style="margin-bottom:0.4rem;">'
-                    f'🔑 Keywords Injected ({len(added)})</div>',
-                    unsafe_allow_html=True,
-                )
-                if added:
-                    chips = "".join(f'<span class="chip chip-green">{k}</span>' for k in added)
-                    st.markdown(f'<div class="chips">{chips}</div>', unsafe_allow_html=True)
-
-                st.write("")
-
-                if rewrites:
-                    st.markdown(
-                        f'<div class="section-label" style="margin-bottom:0.4rem;">'
-                        f'✍️ Bullet Changes ({len(rewrites)})</div>',
-                        unsafe_allow_html=True,
-                    )
-                    for rw in rewrites:
-                        original = (rw.get("original") or "").strip()
-                        improved = (rw.get("improved") or "").strip()
-                        kw       = (rw.get("keyword_added") or "").strip()
-                        if not original:
-                            continue
-                        with st.container(border=True):
-                            st.markdown("**ORIGINAL**")
-                            st.write(original)
-                            st.markdown("**IMPROVED**")
-                            st.write(improved)
-                            if kw:
-                                st.caption(f"Keyword added: {kw}")
-
-
-# ─────────────────────────────────────────────────────────────────────────────────
-# TAB 4 — RAG Chat
-# ─────────────────────────────────────────────────────────────────────────────────
-with tab_chat:
-    _job_search_active = bool(st.session_state.rapidapi_key)
-    _job_badge = (
-        '🔍 <strong>Live job search active</strong> (LinkedIn · Indeed · Glassdoor) — try <em>"Find ML engineer jobs in Bangalore"</em>'
-        if _job_search_active
-        else 'Add <code>RAPIDAPI_KEY</code> to .env to enable live job search'
+with _tab_portfolio:
+    tab_portfolio_mod.render(
+        target_role,
+        github_client_id=_github_client_id,
+        github_client_secret=_github_client_secret,
     )
-    st.markdown(f"""
-<div class="card-blue" style="margin-bottom:1rem;">
-  <div class="section-label">Agentic Resume Chat</div>
-  <p style="font-size:0.9rem;color:#3452c7;line-height:1.65;margin:0;">
-    Every answer is grounded in your resume via RAG. The chat can also <strong>run tools on your behalf</strong> — just ask naturally.<br>
-    <strong>"What's my ATS score?"</strong> · <strong>"Rewrite my bullets"</strong> · <strong>"Tailor my resume for [paste JD]"</strong><br>
-    <span style="font-size:0.85rem;">{_job_badge}</span>
-  </p>
-</div>
-""", unsafe_allow_html=True)
 
-    for msg in st.session_state.chat_history:
-        if msg["role"] == "user":
-            st.markdown(f'<div class="bubble-user">👤 {msg["content"]}</div>', unsafe_allow_html=True)
-        else:
-            with st.container():
-                st.markdown(f"🤖 {msg['content']}")
+with _tab_interview:
+    tab_interview_mod.render(target_role)
 
-                # ── Retrieval quality expander ─────────────────────────────────
-                chunks = msg.get("chunks") or []
-                if chunks:
-                    avg_hybrid = round(sum(c.get("hybrid_score", c.get("cosine_sim", 0.0)) for c in chunks) / len(chunks), 3)
-                    avg_color  = "#27ae60" if avg_hybrid >= 0.55 else "#e67e22" if avg_hybrid >= 0.35 else "#e74c3c"
-                    with st.expander(
-                        f"🔍 Retrieved context — {len(chunks)} chunks · avg hybrid score {avg_hybrid:.3f}",
-                        expanded=False,
-                    ):
-                        st.caption(
-                            "Resume chunks fed to the LLM. Hybrid = BM25 lexical + BGE dense, fused by weighted score normalisation."
-                        )
-                        for i, chunk in enumerate(chunks):
-                            hybrid = chunk.get("hybrid_score", chunk.get("cosine_sim", 0.0))
-                            dense  = chunk.get("dense_score",  chunk.get("cosine_sim", 0.0))
-                            bm25   = chunk.get("bm25_score",   0.0)
-                            cidx   = chunk["chunk_index"]
-                            text   = chunk["text"]
-                            bar_color = "#27ae60" if hybrid >= 0.55 else "#e67e22" if hybrid >= 0.35 else "#e74c3c"
-                            bar_w     = int(hybrid * 100)
-                            st.markdown(
-                                f'<div style="margin-bottom:10px;padding:10px 12px;border-radius:8px;'
-                                f'background:#f8f9fc;border:1px solid #e0e4f0;">'
-                                f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">'
-                                f'<span style="font-size:0.75rem;font-weight:700;color:#8890a4;">Chunk #{cidx}</span>'
-                                f'<span style="font-size:0.78rem;font-weight:800;color:{bar_color};">hybrid {hybrid:.3f}</span>'
-                                f'<span style="font-size:0.72rem;color:#3452c7;">dense {dense:.3f}</span>'
-                                f'<span style="font-size:0.72rem;color:#e67e22;">bm25 {bm25:.3f}</span>'
-                                f'<div style="flex:1;background:#e0e4f0;border-radius:4px;height:5px;">'
-                                f'<div style="background:{bar_color};width:{bar_w}%;height:5px;border-radius:4px;"></div>'
-                                f'</div></div>'
-                                f'<p style="font-size:0.8rem;color:#4a4e6a;margin:0;line-height:1.6;">'
-                                f'{text[:300]}{"…" if len(text) > 300 else ""}</p>'
-                                f'</div>',
-                                unsafe_allow_html=True,
-                            )
+with _tab_raw:
+    tab_raw_mod.render()
 
-    if user_msg := st.chat_input("Ask anything about your resume or interview prep…"):
-        if not st.session_state.groq_client:
-            st.error("Please provide a Groq API key first.")
-        elif not st.session_state.resume_indexed:
-            st.warning("Upload & index a resume first.")
-        else:
-            st.session_state.chat_history.append({"role": "user", "content": user_msg})
+with _tab_maker:
+    tab_maker_mod.render(target_role)
 
-            with st.spinner("Thinking… (may run a tool if needed)"):
-                reply, updated_summary, chunks = chat_with_resume(
-                    user_message=user_msg,
-                    chat_history=st.session_state.chat_history[:-1],
-                    groq_client=st.session_state.groq_client,
-                    resume_text=st.session_state.resume_text or "",
-                    target_role=target_role,
-                    session_summary=st.session_state.session_summary,
-                    rapidapi_key=st.session_state.rapidapi_key,
-                    corpus=st.session_state.vectorstore,
-                    access_token=st.session_state.supabase_access_token,
-                    model=st.session_state.groq_model,
-                    resume_embedding=st.session_state.resume_embedding,
-                )
-
-            # Store retrieved chunk metadata for sidebar highlight
-            st.session_state.last_retrieved = [
-                {
-                    "chunk_index":  c.get("chunk_index", -1),
-                    "dense_score":  c.get("dense_score",  0.0),
-                    "bm25_score":   c.get("bm25_score",   0.0),
-                    "hybrid_score": c.get("hybrid_score", 0.0),
-                }
-                for c in chunks
-            ]
-
-            st.session_state.session_summary = updated_summary
-            st.session_state.chat_history.append({
-                "role": "assistant",
-                "content": reply,
-                "chunks": chunks,
-            })
-            st.rerun()
-
-    if st.session_state.chat_history:
-        if st.button("🗑 Clear Chat History"):
-            st.session_state.chat_history = []
-            st.session_state.session_summary = ""
-            st.rerun()
-
-    # ── PCA Embedding Visualization ───────────────────────────────────────────
-    pca_coords   = st.session_state.pca_coords
-    pca_variance = st.session_state.pca_variance
-    if pca_coords:
-        st.write("")
-        with st.expander(
-            f"📊 Embedding Space — PCA of {len(pca_coords)} resume chunks"
-            f"  (PC1 {pca_variance[0]*100:.1f}% · PC2 {pca_variance[1]*100:.1f}% variance)",
-            expanded=False,
-        ):
-            import plotly.graph_objects as go
-
-            # Find which chunk_indices were retrieved in the last assistant message
-            _retrieved_indices = set()
-            for _msg in reversed(st.session_state.chat_history):
-                if _msg["role"] == "assistant" and _msg.get("chunks"):
-                    _retrieved_indices = {c["chunk_index"] for c in _msg["chunks"]}
-                    break
-
-            _base   = [c for c in pca_coords if c["chunk_index"] not in _retrieved_indices]
-            _highlight = [c for c in pca_coords if c["chunk_index"] in _retrieved_indices]
-
-            fig = go.Figure()
-
-            # All chunks — grey
-            if _base:
-                fig.add_trace(go.Scatter(
-                    x=[c["x"] for c in _base],
-                    y=[c["y"] for c in _base],
-                    mode="markers+text",
-                    marker=dict(size=14, color="#c0c8e8", line=dict(color="#8890a4", width=1.5)),
-                    text=[f"#{c['chunk_index']}" for c in _base],
-                    textposition="top center",
-                    textfont=dict(size=10, color="#8890a4"),
-                    hovertext=[f"Chunk #{c['chunk_index']}<br>{c['text']}" for c in _base],
-                    hoverinfo="text",
-                    name="Resume chunks",
-                ))
-
-            # Retrieved chunks — highlighted orange
-            if _highlight:
-                fig.add_trace(go.Scatter(
-                    x=[c["x"] for c in _highlight],
-                    y=[c["y"] for c in _highlight],
-                    mode="markers+text",
-                    marker=dict(size=18, color="#e67e22", symbol="star",
-                                line=dict(color="#c0392b", width=2)),
-                    text=[f"#{c['chunk_index']}" for c in _highlight],
-                    textposition="top center",
-                    textfont=dict(size=11, color="#c0392b", family="Inter, sans-serif"),
-                    hovertext=[f"★ Retrieved — Chunk #{c['chunk_index']}<br>{c['text']}" for c in _highlight],
-                    hoverinfo="text",
-                    name="Retrieved for last query",
-                ))
-
-            fig.update_layout(
-                height=400,
-                margin=dict(l=20, r=20, t=40, b=20),
-                paper_bgcolor="#f8f9fc",
-                plot_bgcolor="#f8f9fc",
-                xaxis=dict(title=f"PC1 ({pca_variance[0]*100:.1f}%)", showgrid=True,
-                           gridcolor="#e0e4f0", zeroline=False),
-                yaxis=dict(title=f"PC2 ({pca_variance[1]*100:.1f}%)", showgrid=True,
-                           gridcolor="#e0e4f0", zeroline=False),
-                legend=dict(orientation="h", y=-0.15, font=dict(size=11)),
-                showlegend=True,
-            )
-            st.plotly_chart(fig, width='stretch')
-            st.caption(
-                "Each point is a resume chunk projected to 2D via PCA on BGE-small embeddings. "
-                "Nearby points are semantically similar. ★ = chunks retrieved for the last query."
-            )
-
-# ─────────────────────────────────────────────────────────────────────────────────
-# ─────────────────────────────────────────────────────────────────────────────────
-# TAB 5 — Portfolio Generator
-# ─────────────────────────────────────────────────────────────────────────────────
-with tab_portfolio:
-    if not st.session_state.resume_text:
-        st.info("Upload a resume above to generate your portfolio.", icon="👆")
-    else:
-        st.markdown("""
-<div class="card-blue" style="margin-bottom:1rem;">
-  <div class="section-label">🌐 One-Click Portfolio Generator</div>
-  <p style="font-size:0.9rem;color:#3452c7;line-height:1.65;margin:0;">
-    Generates a fully animated personal website from your resume — then publishes it
-    to GitHub Pages automatically. Live URL in under 60 seconds.
-  </p>
-</div>
-""", unsafe_allow_html=True)
-
-        # ── Step 1: Template picker ───────────────────────────────────────────
-        st.markdown('<div class="section-label" style="margin-bottom:0.5rem;">① Choose a Template</div>', unsafe_allow_html=True)
-        col_t1, col_t2 = st.columns(2)
-        with col_t1:
-            luminary_selected = st.button(
-                "☀️  Luminary — Clean & Minimal",
-                width='stretch',
-                key="tmpl_luminary",
-                type="primary" if st.session_state.get("_tmpl") == "luminary" else "secondary",
-            )
-            st.caption("White background · Gradient accents · Dot-grid hero · Card layout")
-        with col_t2:
-            noir_selected = st.button(
-                "🌑  Noir — Dark Pro",
-                width='stretch',
-                key="tmpl_noir",
-                type="primary" if st.session_state.get("_tmpl") == "noir" else "secondary",
-            )
-            st.caption("Dark bg · Cyan neon glow · Animated orbs · Terminal about card")
-
-        if luminary_selected:
-            st.session_state["_tmpl"] = "luminary"
-            st.rerun()
-        if noir_selected:
-            st.session_state["_tmpl"] = "noir"
-            st.rerun()
-
-        chosen_template = st.session_state.get("_tmpl", "luminary")
-        st.markdown(
-            f'<p style="font-size:0.85rem;color:#3452c7;margin-top:4px;">Selected: <strong>{"Luminary" if chosen_template == "luminary" else "Noir"}</strong></p>',
-            unsafe_allow_html=True,
-        )
-
-        # ── Step 2: Repo name ─────────────────────────────────────────────────
-        st.write("")
-        st.markdown('<div class="section-label" style="margin-bottom:0.5rem;">② Repo & Site Name</div>', unsafe_allow_html=True)
-        repo_name = st.text_input(
-            "GitHub repo name",
-            value="portfolio",
-            placeholder="e.g. portfolio  →  username.github.io/portfolio",
-            label_visibility="collapsed",
-        )
-        if repo_name == f"{st.session_state.github_username}.github.io":
-            st.warning("This will overwrite your main GitHub Pages site. Rename unless that's intentional.", icon="⚠️")
-
-        # ── Step 3: GitHub OAuth ──────────────────────────────────────────────
-        st.write("")
-        st.markdown('<div class="section-label" style="margin-bottom:0.5rem;">③ Connect GitHub</div>', unsafe_allow_html=True)
-
-        if st.session_state.github_token:
-            st.success(f"✓ Connected as **{st.session_state.github_username}**", icon="✅")
-            if st.button("Disconnect", key="gh_disconnect"):
-                st.session_state.github_token    = ""
-                st.session_state.github_username = ""
-                st.session_state.github_device_code = ""
-                st.session_state.github_user_code    = ""
-                st.rerun()
-
-        elif st.session_state.github_user_code:
-            # Device code issued — waiting for user to authorise
-            st.markdown(
-                f"""<div style="background:#f0fdf4;border:1.5px solid #27ae60;border-radius:10px;padding:18px 22px;">
-                <p style="font-size:0.9rem;color:#1a4a2e;margin:0 0 10px 0;">
-                  <strong>Step 1</strong> — Open
-                  <a href="https://github.com/login/device" target="_blank" style="color:#27ae60;">
-                    github.com/login/device
-                  </a> in a new tab
-                </p>
-                <p style="font-size:0.9rem;color:#1a4a2e;margin:0 0 10px 0;">
-                  <strong>Step 2</strong> — Enter this code:
-                </p>
-                <p style="font-family:monospace;font-size:1.6rem;font-weight:800;
-                           letter-spacing:0.15em;color:#1a1a2e;margin:0 0 12px 0;">
-                  {st.session_state.github_user_code}
-                </p>
-                <p style="font-size:0.82rem;color:#4a4e6a;margin:0;">
-                  Then click the button below once you've approved.
-                </p>
-                </div>""",
-                unsafe_allow_html=True,
-            )
-            if st.button("✅  I've approved — complete connection", key="gh_poll"):
-                with st.spinner("🔐 Checking GitHub authorisation…"):
-                    _token, _err = poll_for_token(
-                        _github_client_id,
-                        _github_client_secret,
-                        st.session_state.github_device_code,
-                        interval=2,
-                        timeout=60,
-                    )
-                if _token:
-                    st.session_state.github_token    = _token
-                    st.session_state.github_username = get_github_username(_token)
-                    st.session_state.github_device_code = ""
-                    st.session_state.github_user_code    = ""
-                    st.rerun()
-                else:
-                    st.error(f"Auth failed: {_err}. Click 'Connect GitHub' to try again.")
-                    st.session_state.github_device_code = ""
-                    st.session_state.github_user_code    = ""
-
-        else:
-            if _github_client_id:
-                if st.button("🐙  Connect GitHub", key="gh_connect"):
-                    with st.spinner("Requesting device code from GitHub…"):
-                        _dc_data, _dc_err = request_device_code(_github_client_id)
-                    if _dc_err:
-                        st.error(f"GitHub error: {_dc_err}")
-                    else:
-                        st.session_state.github_device_code = _dc_data["device_code"]
-                        st.session_state.github_user_code    = _dc_data["user_code"]
-                        st.rerun()
-                st.caption("Grants repo-only scope. We create one repo on your behalf — nothing else.")
-            else:
-                st.warning("Add `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` to your `.env` to enable GitHub publishing.", icon="⚙️")
-
-        # ── Generate + Publish ────────────────────────────────────────────────
-        st.write("")
-        st.markdown('<div class="section-label" style="margin-bottom:0.5rem;">④ Generate &amp; Publish</div>', unsafe_allow_html=True)
-
-        can_publish = bool(st.session_state.github_token and st.session_state.groq_client)
-        if st.button(
-            "🚀  Generate Portfolio & Publish to GitHub Pages",
-            key="run_portfolio",
-            disabled=not can_publish,
-            width='stretch',
-        ):
-            # Ensure resume is structured
-            with st.spinner("🗂️  Parsing resume structure…"):
-                structure = st.session_state.resume_structure or structure_resume(
-                    st.session_state.resume_text,
-                    st.session_state.groq_client,
-                    model=st.session_state.groq_model,
-                )
-                st.session_state.resume_structure = structure
-
-            with st.spinner("✨  Generating portfolio content…"):
-                files, dummy_sections = generate_portfolio(
-                    structure,
-                    target_role,
-                    chosen_template,
-                    st.session_state.groq_client,
-                    model=st.session_state.groq_model,
-                )
-                st.session_state.portfolio_files           = files
-                st.session_state.portfolio_dummy_sections  = dummy_sections
-
-            with st.spinner("🐙  Publishing to GitHub Pages…"):
-                pages_url, pub_err = publish_portfolio(
-                    token=st.session_state.github_token,
-                    files=files,
-                    repo_name=repo_name.strip() or "portfolio",
-                    description=f"Portfolio of {st.session_state.resume_structure.get('name','') or 'Developer'} — built with PrepSense AI",
-                )
-                st.session_state.portfolio_pages_url = pages_url
-                if pub_err and not pages_url:
-                    st.error(f"Publishing failed: {pub_err}")
-
-        if not can_publish and st.session_state.groq_client:
-            st.caption("Connect GitHub above to enable publishing.")
-        elif not can_publish:
-            st.caption("Provide Groq API key and connect GitHub to publish.")
-
-        # ── Results ───────────────────────────────────────────────────────────
-        pages_url      = st.session_state.portfolio_pages_url
-        dummy_sections = st.session_state.portfolio_dummy_sections
-        files          = st.session_state.portfolio_files
-
-        if pages_url:
-            st.write("")
-            st.success("🎉 Portfolio published!", icon="🌐")
-            st.markdown(
-                f'<a href="{pages_url}" target="_blank" style="display:inline-block;padding:12px 28px;'
-                f'background:linear-gradient(135deg,#27ae60,#1abc9c);color:#fff;border-radius:10px;'
-                f'font-weight:700;font-size:1rem;text-decoration:none;">🔗  Visit Live Site →</a>',
-                unsafe_allow_html=True,
-            )
-            st.caption(f"URL: {pages_url}  ·  GitHub Pages takes ~30-60 seconds to go live after first publish.")
-
-        if dummy_sections:
-            st.write("")
-            st.warning(
-                f"**Placeholder content** was used for: **{', '.join(dummy_sections)}**.\n\n"
-                f"These sections show a yellow ⚠️ banner on your live site. "
-                f"Add the missing content to your resume and regenerate to replace them.",
-                icon="⚠️",
-            )
-
-        if files:
-            st.write("")
-            st.markdown('<div class="section-label" style="margin-bottom:0.4rem;">⬇ Download Files</div>', unsafe_allow_html=True)
-            dl_col1, dl_col2, dl_col3 = st.columns(3)
-            with dl_col1:
-                st.download_button("⬇ index.html", data=files["index.html"], file_name="index.html", mime="text/html", width='stretch')
-            with dl_col2:
-                st.download_button("⬇ style.css",  data=files["style.css"],  file_name="style.css",  mime="text/css",  width='stretch')
-            with dl_col3:
-                st.download_button("⬇ script.js",  data=files["script.js"],  file_name="script.js",  mime="text/javascript", width='stretch')
-
-# ─────────────────────────────────────────────────────────────────────────────────
-# TAB 6 — Interview Prep (Mock Interview + Upskill)
-# ─────────────────────────────────────────────────────────────────────────────────
-with tab_interview:
-    if not st.session_state.resume_text:
-        st.info("Upload a resume above to use Interview Prep.", icon="👆")
-    else:
-        st.markdown("""
-<div class="card-blue" style="margin-bottom:1rem;">
-  <div class="section-label">🎓 Interview Prep &amp; Upskill Hub</div>
-  <p style="font-size:0.9rem;color:#3452c7;line-height:1.65;margin:0;">
-    Practice with resume-based MCQs and concept Q&amp;As, then build a personalised learning plan
-    for any skill you want to add to your arsenal.
-  </p>
-</div>
-""", unsafe_allow_html=True)
-
-        prep_tab, upskill_tab = st.tabs(["🧠  Mock Interview", "🚀  Upskill"])
-
-        # ── MOCK INTERVIEW ─────────────────────────────────────────────────────
-        with prep_tab:
-            st.markdown(
-                '<p style="font-size:0.9rem;color:#4a4e6a;margin-bottom:0.8rem;">'
-                'Resume-specific questions — your projects, your tech choices, your trade-offs. '
-                '~34 questions across Easy / Medium / Hard.</p>',
-                unsafe_allow_html=True,
-            )
-
-            if st.button("▶  Generate Interview Questions", key="run_interview"):
-                if not st.session_state.groq_client:
-                    st.error("Please provide a Groq API key first.")
-                else:
-                    with st.spinner("🧠  Reading your resume and generating questions…"):
-                        st.session_state.interview_qna = generate_qna(
-                            st.session_state.resume_text,
-                            target_role,
-                            st.session_state.groq_client,
-                            model=st.session_state.groq_model,
-                        )
-
-            qna = st.session_state.interview_qna
-            if not isinstance(qna, dict):
-                st.session_state.interview_qna = None
-                qna = None
-
-            if qna and (qna.get("easy") or qna.get("medium") or qna.get("hard")):
-                easy_qs   = qna.get("easy",   [])
-                medium_qs = qna.get("medium", [])
-                hard_qs   = qna.get("hard",   [])
-
-                # Summary counts
-                total = len(easy_qs) + len(medium_qs) + len(hard_qs)
-                st.markdown(
-                    f'<p style="font-size:0.82rem;color:#8890a4;margin:0.4rem 0 0.8rem;">'
-                    f'{total} questions — {len(easy_qs)} Easy · {len(medium_qs)} Medium · {len(hard_qs)} Hard</p>',
-                    unsafe_allow_html=True,
-                )
-
-                diff_easy, diff_med, diff_hard = st.tabs([
-                    f"🟢  Easy ({len(easy_qs)})",
-                    f"🟡  Medium ({len(medium_qs)})",
-                    f"🔴  Hard ({len(hard_qs)})",
-                ])
-
-                def _render_qna_list(questions: list, prefix: str) -> None:
-                    if not questions:
-                        st.info("No questions generated for this tier.", icon="ℹ️")
-                        return
-                    for i, item in enumerate(questions):
-                        question = item.get("question", "")
-                        answer   = item.get("answer", "")
-                        example  = item.get("example")
-                        with st.expander(f"**{prefix}{i+1}.** {question}", expanded=False):
-                            st.markdown(
-                                f'<p style="font-size:0.92rem;color:#1a1a2e;line-height:1.75;margin:0 0 4px 0;">'
-                                f'{answer}</p>',
-                                unsafe_allow_html=True,
-                            )
-                            if example:
-                                lang = (
-                                    "python" if ("def " in example or "import " in example)
-                                    else "javascript" if ("=>" in example or "const " in example or "function" in example)
-                                    else "text"
-                                )
-                                st.code(example, language=lang)
-
-                with diff_easy:
-                    _render_qna_list(easy_qs, "E")
-                with diff_med:
-                    _render_qna_list(medium_qs, "M")
-                with diff_hard:
-                    _render_qna_list(hard_qs, "H")
-
-        # ── UPSKILL ────────────────────────────────────────────────────────────
-        with upskill_tab:
-            st.markdown(
-                '<p style="font-size:0.9rem;color:#4a4e6a;margin-bottom:0.8rem;">'
-                'Enter a skill you want to learn, or let us recommend based on your resume gaps. '
-                'Get a 4-week roadmap + curated YouTube resources.</p>',
-                unsafe_allow_html=True,
-            )
-
-            # ── Skill input row ───────────────────────────────────────────────
-            col_skill_in, col_skill_btn = st.columns([3, 1])
-            with col_skill_in:
-                custom_skill = st.text_input(
-                    "Skill to learn",
-                    placeholder="e.g. Docker, System Design, TypeScript, GraphQL…",
-                    label_visibility="collapsed",
-                    key="upskill_custom_input",
-                )
-            with col_skill_btn:
-                run_custom = st.button("▶  Get Plan", key="run_upskill_custom", width='stretch')
-
-            if run_custom and custom_skill.strip():
-                if not st.session_state.groq_client:
-                    st.error("Please provide a Groq API key first.")
-                else:
-                    st.session_state.upskill_selected_skill = custom_skill.strip()
-                    with st.spinner(f"📅  Building learning plan for **{custom_skill.strip()}**…"):
-                        st.session_state.upskill_plan = generate_learning_plan(
-                            custom_skill.strip(),
-                            target_role,
-                            st.session_state.groq_client,
-                            model=st.session_state.groq_model,
-                        )
-
-            st.divider()
-
-            # ── AI Recommendations ────────────────────────────────────────────
-            st.markdown(
-                '<div class="section-label" style="margin-bottom:0.5rem;">✨ AI-Recommended Skills</div>',
-                unsafe_allow_html=True,
-            )
-            st.caption("Based on your resume gaps and target role — click any skill to generate its learning plan.")
-
-            if st.button("🔍  Get Skill Recommendations", key="run_skill_recs"):
-                if not st.session_state.groq_client:
-                    st.error("Please provide a Groq API key first.")
-                else:
-                    missing_kw = (st.session_state.ats_result or {}).get("missing_keywords", [])
-                    with st.spinner("✨  Analysing skill gaps…"):
-                        st.session_state.upskill_recommended = recommend_skills(
-                            st.session_state.resume_text,
-                            target_role,
-                            missing_kw,
-                            st.session_state.groq_client,
-                            model=st.session_state.groq_model,
-                        )
-
-            recs = st.session_state.upskill_recommended
-            if recs:
-                priority_color = {"High": "#e74c3c", "Medium": "#e67e22", "Low": "#27ae60"}
-                rec_cols = st.columns(min(len(recs), 3))
-                for idx, rec in enumerate(recs):
-                    skill_name = rec.get("skill", "")
-                    priority   = rec.get("priority", "Medium")
-                    reason     = rec.get("reason", "")
-                    p_color    = priority_color.get(priority, "#8890a4")
-
-                    with rec_cols[idx % 3]:
-                        st.markdown(
-                            f'<div class="card" style="padding:14px 16px;margin-bottom:0.5rem;">'
-                            f'<div style="font-weight:700;font-size:0.95rem;color:#1a1a2e;">{skill_name}</div>'
-                            f'<span style="font-size:0.75rem;font-weight:600;color:{p_color};'
-                            f'background:{p_color}18;padding:2px 8px;border-radius:100px;">{priority} Priority</span>'
-                            f'<p style="font-size:0.82rem;color:#4a4e6a;margin:6px 0 0 0;line-height:1.5;">{reason}</p>'
-                            f'</div>',
-                            unsafe_allow_html=True,
-                        )
-                        if st.button(f"📅 Plan for {skill_name}", key=f"plan_{idx}", width='stretch'):
-                            if not st.session_state.groq_client:
-                                st.error("Please provide a Groq API key first.")
-                            else:
-                                st.session_state.upskill_selected_skill = skill_name
-                                with st.spinner(f"📅  Building plan for **{skill_name}**…"):
-                                    st.session_state.upskill_plan = generate_learning_plan(
-                                        skill_name,
-                                        target_role,
-                                        st.session_state.groq_client,
-                                        model=st.session_state.groq_model,
-                                    )
-
-            # ── Learning Plan ─────────────────────────────────────────────────
-            plan = st.session_state.upskill_plan
-            sel  = st.session_state.upskill_selected_skill
-
-            if plan and sel:
-                st.write("")
-                st.markdown(
-                    f'<div class="section-label" style="margin-bottom:0.6rem;">📅 4-Week Plan — {sel}</div>',
-                    unsafe_allow_html=True,
-                )
-
-                overview = plan.get("overview", "")
-                if overview:
-                    st.markdown(
-                        f'<div class="card-blue" style="margin-bottom:1rem;">'
-                        f'<p style="font-size:0.9rem;color:#3452c7;margin:0;line-height:1.65;">{overview}</p>'
-                        f'</div>',
-                        unsafe_allow_html=True,
-                    )
-
-                # Week cards
-                weeks = plan.get("weeks", [])
-                if weeks:
-                    week_cols = st.columns(len(weeks))
-                    week_colors = ["#3452c7", "#27ae60", "#e67e22", "#8e44ad"]
-                    for wi, week in enumerate(weeks):
-                        wnum   = week.get("week", wi + 1)
-                        goal   = week.get("goal", "")
-                        topics = week.get("topics", [])
-                        wcolor = week_colors[wi % len(week_colors)]
-                        topics_html = "".join(
-                            f'<li style="font-size:0.82rem;color:#4a4e6a;margin:3px 0;">{t}</li>'
-                            for t in topics
-                        )
-                        with week_cols[wi]:
-                            st.markdown(
-                                f'<div class="card" style="padding:14px;height:100%;">'
-                                f'<div style="font-size:0.75rem;font-weight:700;color:{wcolor};'
-                                f'text-transform:uppercase;letter-spacing:0.5px;">Week {wnum}</div>'
-                                f'<div style="font-weight:600;font-size:0.88rem;color:#1a1a2e;'
-                                f'margin:4px 0 8px;">{goal}</div>'
-                                f'<ul style="margin:0;padding-left:1rem;">{topics_html}</ul>'
-                                f'</div>',
-                                unsafe_allow_html=True,
-                            )
-
-                # Resources
-                resources = plan.get("resources", [])
-                if resources:
-                    st.write("")
-                    st.markdown(
-                        '<div class="section-label" style="margin-bottom:0.6rem;">🎬 Resources &amp; YouTube Playlists</div>',
-                        unsafe_allow_html=True,
-                    )
-                    type_icon = {"Video": "▶️", "Course": "🎓", "Docs": "📖", "Practice": "💻"}
-                    type_color = {"Video": "#e74c3c", "Course": "#3452c7", "Docs": "#27ae60", "Practice": "#8e44ad"}
-
-                    for res in resources:
-                        title  = res.get("title", "Resource")
-                        rtype  = res.get("type", "Video")
-                        query  = res.get("search_query", title)
-                        url    = yt_search_url(query)
-                        icon   = type_icon.get(rtype, "🔗")
-                        color  = type_color.get(rtype, "#4a4e6a")
-
-                        st.markdown(
-                            f'<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;'
-                            f'border-radius:8px;background:#f8f9fc;border:1px solid #e8eaf4;margin-bottom:6px;">'
-                            f'<span style="font-size:1.1rem;">{icon}</span>'
-                            f'<div style="flex:1;">'
-                            f'<span style="font-size:0.88rem;font-weight:600;color:#1a1a2e;">{title}</span>'
-                            f'<span style="font-size:0.75rem;font-weight:600;color:{color};'
-                            f'background:{color}18;padding:1px 7px;border-radius:100px;margin-left:8px;">{rtype}</span>'
-                            f'</div>'
-                            f'<a href="{url}" target="_blank" style="font-size:0.8rem;font-weight:600;'
-                            f'color:#3452c7;text-decoration:none;white-space:nowrap;">Search on YouTube →</a>'
-                            f'</div>',
-                            unsafe_allow_html=True,
-                        )
-
-# ─────────────────────────────────────────────────────────────────────────────────
-# TAB 7 — Raw Resume Text
-# ─────────────────────────────────────────────────────────────────────────────────
-with tab_raw:
-    if not st.session_state.resume_text:
-        st.info("No resume loaded yet. Upload one above.", icon="👆")
-    else:
-        text = st.session_state.resume_text
-        st.markdown(
-            f'<div class="section-label">Parsed Text · {len(text.split())} words · {len(text)} chars</div>',
-            unsafe_allow_html=True,
-        )
-        preview = text[:6000] + ("\n…[truncated — first 6,000 chars shown]" if len(text) > 6000 else "")
-        st.markdown(f"""
-<div class="card">
-  <pre style="font-family:'JetBrains Mono',monospace;font-size:0.85rem;color:#4a4e6a;
-              white-space:pre-wrap;line-height:1.75;max-height:520px;overflow-y:auto;margin:0;">{preview}</pre>
-</div>
-""", unsafe_allow_html=True)
-
-        st.download_button(
-            label="⬇ Download parsed text (.txt)",
-            data=text,
-            file_name="parsed_resume.txt",
-            mime="text/plain",
-        )
-
-# ─────────────────────────────────────────────────────────────────────────────────
-# TAB 8 — Make My Resume  (two-column: form left, live HTML preview right)
-# ─────────────────────────────────────────────────────────────────────────────────
-with tab_maker:
-    _mk_form, _mk_prev = st.columns([11, 9], gap="large")
-    d = st.session_state.maker_data
-
-    # ── LEFT: Form ─────────────────────────────────────────────────────────────
-    with _mk_form:
-        st.markdown(
-            """<p style="font-family:Inter,sans-serif;font-weight:700;font-size:1.1rem;
-            color:#1a1a2e;margin-bottom:4px;">🛠️ Build Your Resume</p>""",
-            unsafe_allow_html=True,
-        )
-        if not st.session_state.groq_client:
-            st.info("Add your Groq API key in the sidebar to unlock AI bullet & summary generation.", icon="🔑")
-
-        _tab_p, _tab_e, _tab_x, _tab_pr, _tab_sk = st.tabs(
-            ["👤 Personal", "🎓 Education", "💼 Experience", "🚀 Projects", "🧠 Skills"]
-        )
-
-        # ── Personal ───────────────────────────────────────────────────────────
-        with _tab_p:
-            _c1, _c2 = st.columns(2)
-            with _c1:
-                d["name"]     = st.text_input("Full Name",   value=d["name"],     key="mk2_name", placeholder="Arjun Sharma")
-                d["email"]    = st.text_input("Email",        value=d["email"],    key="mk2_email", placeholder="arjun@email.com")
-                d["phone"]    = st.text_input("Phone",        value=d["phone"],    key="mk2_phone", placeholder="+91-9876543210")
-            with _c2:
-                d["location"] = st.text_input("Location",    value=d["location"], key="mk2_loc",   placeholder="Bengaluru, India")
-                d["linkedin"] = st.text_input("LinkedIn URL", value=d["linkedin"], key="mk2_li",    placeholder="linkedin.com/in/arjun")
-                d["github"]   = st.text_input("GitHub URL",  value=d["github"],   key="mk2_gh",    placeholder="github.com/arjun")
-
-        # ── Education ──────────────────────────────────────────────────────────
-        with _tab_e:
-            import time as _time
-            st.caption("Add as many entries as you need. Remove ones you don't want.")
-            for _ei, edu in enumerate(d["education"]):
-                _eid = edu.get("_id", str(_ei))
-                _edu_label = edu.get("degree") or edu.get("institution") or f"Entry {_ei + 1}"
-                with st.expander(_edu_label, expanded=(_ei == len(d["education"]) - 1)):
-                    _ec1, _ec2 = st.columns(2)
-                    with _ec1:
-                        edu["degree"]      = st.text_input("Degree / Programme", value=edu.get("degree",""),      key=f"mk2_ed_deg_{_eid}",  placeholder="B.Tech Computer Science")
-                        edu["institution"] = st.text_input("Institution",         value=edu.get("institution",""), key=f"mk2_ed_inst_{_eid}", placeholder="VIT University")
-                    with _ec2:
-                        edu["dates"]       = st.text_input("Dates",               value=edu.get("dates",""),       key=f"mk2_ed_dt_{_eid}",   placeholder="2022 – 2026")
-                        edu["gpa"]         = st.text_input("GPA (optional)",       value=edu.get("gpa",""),         key=f"mk2_ed_gpa_{_eid}",  placeholder="8.5 / 10")
-                    edu["location"]        = st.text_input("Location",            value=edu.get("location",""),    key=f"mk2_ed_loc_{_eid}",  placeholder="Vellore, Tamil Nadu")
-                    edu["achievements"]    = st.text_area(
-                        "Achievements / Coursework (optional, one per line)",
-                        value=edu.get("achievements",""),
-                        key=f"mk2_ed_ach_{_eid}",
-                        placeholder="Ranked 3rd in department\nRelevant coursework: OS, DBMS, Networks",
-                        height=75,
-                    )
-                    if st.button("🗑 Remove", key=f"mk2_ed_rm_{_eid}"):
-                        d["education"].pop(_ei)
-                        st.rerun()
-            if st.button("➕ Add Education", key="mk2_add_edu"):
-                d["education"].append({
-                    "_id": f"edu_{int(_time.time()*1000) % 9999999}",
-                    "degree": "", "institution": "", "location": "", "dates": "", "gpa": "", "achievements": "",
-                })
-                st.rerun()
-
-        # ── Experience ─────────────────────────────────────────────────────────
-        with _tab_x:
-            import time as _time
-            st.caption("Describe what you did in 1-2 lines → AI expands into strong bullets.")
-            for _xi, exp in enumerate(d["experience"]):
-                _xid = exp.get("_id", str(_xi))
-                _exp_label = (f"{exp.get('title','')} @ {exp.get('company','')}" if exp.get("title") else f"Entry {_xi + 1}").strip(" @")
-                with st.expander(_exp_label, expanded=(_xi == len(d["experience"]) - 1)):
-                    _xc1, _xc2 = st.columns(2)
-                    with _xc1:
-                        exp["title"]   = st.text_input("Job Title",  value=exp.get("title",""),   key=f"mk2_xp_t_{_xid}",  placeholder="Backend Engineer Intern")
-                        exp["company"] = st.text_input("Company",    value=exp.get("company",""), key=f"mk2_xp_c_{_xid}",  placeholder="Razorpay")
-                    with _xc2:
-                        exp["dates"]    = st.text_input("Dates",     value=exp.get("dates",""),   key=f"mk2_xp_d_{_xid}",  placeholder="May 2024 – Aug 2024")
-                        exp["location"] = st.text_input("Location",  value=exp.get("location",""),key=f"mk2_xp_l_{_xid}",  placeholder="Remote")
-                    exp["_desc"] = st.text_area(
-                        "✏️ What did you do? (AI will expand this into bullets)",
-                        value=exp.get("_desc",""),
-                        key=f"mk2_xp_desc_{_xid}",
-                        placeholder="e.g. Built REST APIs for order management in Node.js + MongoDB, handled 500+ daily transactions",
-                        height=70,
-                    )
-                    _xbtn_col, _xrm_col = st.columns([3, 1])
-                    with _xbtn_col:
-                        if st.button("✨ Generate Bullets with AI", key=f"mk2_xp_enh_{_xid}", type="primary"):
-                            if not st.session_state.groq_client:
-                                st.error("Groq API key required.")
-                            elif not exp.get("_desc","").strip():
-                                st.warning("Add a brief description first.")
-                            elif not exp.get("title","").strip():
-                                st.warning("Add a job title first.")
-                            else:
-                                try:
-                                    with st.spinner("Generating bullets…"):
-                                        exp["bullets"] = enhance_bullets(
-                                            role=exp["title"],
-                                            company_or_project=exp.get("company",""),
-                                            description=exp["_desc"],
-                                            client=st.session_state.groq_client,
-                                            model=st.session_state.groq_model,
-                                        )
-                                    exp["_desc"] = ""
-                                    st.rerun()
-                                except Exception as _err:
-                                    st.error(str(_err))
-                    with _xrm_col:
-                        if st.button("🗑 Remove", key=f"mk2_xp_rm_{_xid}"):
-                            d["experience"].pop(_xi)
-                            st.rerun()
-                    if exp.get("bullets"):
-                        _btext = st.text_area(
-                            "Generated bullets — edit freely (one per line)",
-                            value="\n".join(exp["bullets"]),
-                            key=f"mk2_xp_bedit_{_xid}",
-                            height=100,
-                        )
-                        exp["bullets"] = [b.strip() for b in _btext.split("\n") if b.strip()]
-            if st.button("➕ Add Experience", key="mk2_add_exp"):
-                d["experience"].append({
-                    "_id": f"exp_{int(_time.time()*1000) % 9999999}",
-                    "title": "", "company": "", "location": "", "dates": "", "bullets": [], "_desc": "",
-                })
-                st.rerun()
-
-        # ── Projects ───────────────────────────────────────────────────────────
-        with _tab_pr:
-            import time as _time
-            st.caption("Describe what you built in 1-2 lines → AI expands into strong bullets.")
-            for _pi, proj in enumerate(d["projects"]):
-                _pid = proj.get("_id", str(_pi))
-                _proj_label = proj.get("name") or f"Entry {_pi + 1}"
-                with st.expander(_proj_label, expanded=(_pi == len(d["projects"]) - 1)):
-                    _pc1, _pc2 = st.columns(2)
-                    with _pc1:
-                        proj["name"] = st.text_input("Project Name", value=proj.get("name",""), key=f"mk2_pr_n_{_pid}",  placeholder="PrepSense AI")
-                        proj["tech"] = st.text_input("Tech Stack",   value=proj.get("tech",""), key=f"mk2_pr_t_{_pid}",  placeholder="Python, Streamlit, Groq")
-                    with _pc2:
-                        proj["dates"] = st.text_input("Date",        value=proj.get("dates",""),key=f"mk2_pr_d_{_pid}",  placeholder="Jan 2025")
-                        proj["link"]  = st.text_input("GitHub Link",  value=proj.get("link",""), key=f"mk2_pr_l_{_pid}",  placeholder="github.com/you/project")
-                    proj["_desc"] = st.text_area(
-                        "✏️ What did you build? (AI will expand this into bullets)",
-                        value=proj.get("_desc",""),
-                        key=f"mk2_pr_desc_{_pid}",
-                        placeholder="e.g. Real-time chat app using Socket.io + React, 200 concurrent users, deployed on Railway",
-                        height=70,
-                    )
-                    _pbtn_col, _prm_col = st.columns([3, 1])
-                    with _pbtn_col:
-                        if st.button("✨ Generate Bullets with AI", key=f"mk2_pr_enh_{_pid}", type="primary"):
-                            if not st.session_state.groq_client:
-                                st.error("Groq API key required.")
-                            elif not proj.get("_desc","").strip():
-                                st.warning("Add a brief description first.")
-                            elif not proj.get("name","").strip():
-                                st.warning("Add a project name first.")
-                            else:
-                                try:
-                                    with st.spinner("Generating bullets…"):
-                                        proj["bullets"] = enhance_bullets(
-                                            role=proj["name"],
-                                            company_or_project=proj.get("tech",""),
-                                            description=proj["_desc"],
-                                            client=st.session_state.groq_client,
-                                            model=st.session_state.groq_model,
-                                        )
-                                    proj["_desc"] = ""
-                                    st.rerun()
-                                except Exception as _err:
-                                    st.error(str(_err))
-                    with _prm_col:
-                        if st.button("🗑 Remove", key=f"mk2_pr_rm_{_pid}"):
-                            d["projects"].pop(_pi)
-                            st.rerun()
-                    if proj.get("bullets"):
-                        _pb_text = st.text_area(
-                            "Generated bullets — edit freely (one per line)",
-                            value="\n".join(proj["bullets"]),
-                            key=f"mk2_pr_bedit_{_pid}",
-                            height=100,
-                        )
-                        proj["bullets"] = [b.strip() for b in _pb_text.split("\n") if b.strip()]
-            if st.button("➕ Add Project", key="mk2_add_proj"):
-                d["projects"].append({
-                    "_id": f"proj_{int(_time.time()*1000) % 9999999}",
-                    "name": "", "tech": "", "dates": "", "link": "", "bullets": [], "_desc": "",
-                })
-                st.rerun()
-
-        # ── Skills ─────────────────────────────────────────────────────────────
-        with _tab_sk:
-            # Apply any AI-generated summary BEFORE the text_area widget renders.
-            # Setting a widget's session-state key after it's instantiated throws an error,
-            # so we use a staging key (_mk2_pending_summary) that gets applied here first.
-            if "_mk2_pending_summary" in st.session_state:
-                st.session_state["mk2_summary"] = st.session_state.pop("_mk2_pending_summary")
-                d["summary"] = st.session_state["mk2_summary"]
-
-            sk = d["skills"]
-            _sk1, _sk2 = st.columns(2)
-            with _sk1:
-                sk["languages"]  = st.text_input("Languages",             value=sk["languages"],  key="mk2_sk_l",  placeholder="Python, Java, C++")
-                sk["frameworks"] = st.text_input("Frameworks & Libraries", value=sk["frameworks"], key="mk2_sk_f",  placeholder="React, Django, FastAPI")
-            with _sk2:
-                sk["tools"] = st.text_input("Tools & Platforms", value=sk["tools"],  key="mk2_sk_t",  placeholder="Git, Docker, AWS")
-                sk["other"] = st.text_input("Other",              value=sk["other"],  key="mk2_sk_o",  placeholder="REST APIs, Agile, System Design")
-
-            _ca1, _ca2 = st.columns(2)
-            with _ca1:
-                d["certifications"] = st.text_area(
-                    "Certifications (one per line)",
-                    value=d["certifications"],
-                    key="mk2_certs",
-                    placeholder="AWS Certified Cloud Practitioner (2024)",
-                    height=90,
-                )
-            with _ca2:
-                d["achievements"] = st.text_area(
-                    "Achievements (one per line)",
-                    value=d["achievements"],
-                    key="mk2_ach",
-                    placeholder="Winner — Smart India Hackathon 2024",
-                    height=90,
-                )
-
-            st.divider()
-            d["summary"] = st.text_area(
-                "Professional Summary",
-                value=d["summary"],
-                key="mk2_summary",
-                placeholder="Write manually or generate with AI below…",
-                height=80,
-            )
-            if st.button("✨ Generate Summary with AI", key="mk2_gen_sum", use_container_width=True):
-                if not st.session_state.groq_client:
-                    st.error("Groq API key required.")
-                else:
-                    _exp_titles = [e["title"] for e in d["experience"] if e.get("title")]
-                    _all_skills = []
-                    for _sk_val in [sk["languages"], sk["frameworks"], sk["tools"]]:
-                        _all_skills += [s.strip() for s in _sk_val.split(",") if s.strip()]
-                    try:
-                        with st.spinner("Writing summary…"):
-                            _gen_sum = generate_maker_summary(
-                                name=d["name"],
-                                target_role=target_role,
-                                experience_titles=_exp_titles,
-                                skills_flat=_all_skills,
-                                client=st.session_state.groq_client,
-                                model=st.session_state.groq_model,
-                            )
-                        d["summary"] = _gen_sum
-                        # Stage the value — applied before the widget renders on next run
-                        st.session_state["_mk2_pending_summary"] = _gen_sum
-                        st.rerun()
-                    except Exception as _err:
-                        st.error(str(_err))
-
-        st.markdown("<br/>", unsafe_allow_html=True)
-
-        # ── Export ─────────────────────────────────────────────────────────────
-        if st.button("🏗️  Export Resume PDF", key="mk2_build", type="primary", use_container_width=True):
-            def _csv(s):
-                return [x.strip() for x in (s or "").split(",") if x.strip()]
-            def _lines(s):
-                return [x.strip() for x in (s or "").split("\n") if x.strip()]
-
-            _pdf_data = {
-                "name":     d["name"],
-                "email":    d["email"],
-                "phone":    d["phone"],
-                "linkedin": d["linkedin"],
-                "github":   d["github"],
-                "location": d["location"],
-                "summary":  d["summary"],
-                "education": [
-                    {
-                        "degree":      edu.get("degree", ""),
-                        "institution": edu.get("institution", ""),
-                        "location":    edu.get("location", ""),
-                        "dates":       edu.get("dates", ""),
-                        "gpa":         edu.get("gpa", ""),
-                        "bullets":     [a.strip() for a in (edu.get("achievements") or "").split("\n") if a.strip()],
-                    }
-                    for edu in d["education"]
-                    if edu.get("degree") or edu.get("institution")
-                ],
-                "experience": [
-                    {k: v for k, v in exp.items() if k != "_desc"}
-                    for exp in d["experience"]
-                    if exp.get("title")
-                ],
-                "projects": [
-                    {k: v for k, v in proj.items() if k != "_desc"}
-                    for proj in d["projects"]
-                    if proj.get("name")
-                ],
-                "skills": {
-                    "languages":  _csv(d["skills"]["languages"]),
-                    "frameworks": _csv(d["skills"]["frameworks"]),
-                    "tools":      _csv(d["skills"]["tools"]),
-                    "other":      _csv(d["skills"]["other"]),
-                },
-                "certifications": _lines(d["certifications"]),
-                "achievements":   _lines(d["achievements"]),
-            }
-            try:
-                with st.spinner("Building PDF…"):
-                    st.session_state.maker_pdf_bytes = build_resume_pdf(_pdf_data)
-                st.success("PDF ready — download from the preview panel →", icon="✅")
-            except Exception as _err:
-                st.error(f"PDF build failed: {_err}")
-
-    # ── RIGHT: Live Preview ─────────────────────────────────────────────────────
-    with _mk_prev:
-        st.markdown(
-            """<p style="font-family:Inter,sans-serif;font-weight:700;font-size:1.1rem;
-            color:#1a1a2e;margin-bottom:6px;">Live Preview</p>""",
-            unsafe_allow_html=True,
-        )
-        components.html(render_resume_html(d), height=750, scrolling=True)
-
-        if st.session_state.maker_pdf_bytes:
-            _dl_name = (d.get("name", "resume") or "resume").replace(" ", "_")
-            st.download_button(
-                label="⬇ Download Resume PDF",
-                data=st.session_state.maker_pdf_bytes,
-                file_name=f"{_dl_name}_resume.pdf",
-                mime="application/pdf",
-                use_container_width=True,
-            )
-
-# ─────────────────────────────────────────────────────────────────────────────────
-# TAB 9 — Semantic Job Matching
-# Fetches live jobs via JSearch, embeds JDs + resume with BGE-small,
-# ranks by cosine similarity, shows match % cards.
-# ─────────────────────────────────────────────────────────────────────────────────
-with tab_jobs:
-    if not st.session_state.resume_text:
-        st.info("Upload a resume above to enable semantic job matching.", icon="👆")
-    elif not st.session_state.rapidapi_key:
-        st.warning(
-            "Add `RAPIDAPI_KEY` to your `.env` file to enable live job search. "
-            "Get a free key at rapidapi.com → subscribe to JSearch.",
-            icon="🔑",
-        )
-    else:
-        st.markdown("""
-<div class="card-blue" style="margin-bottom:1rem;">
-  <div class="section-label">🔍 Semantic Job Matching</div>
-  <p style="font-size:0.9rem;color:#3452c7;line-height:1.65;margin:0;">
-    Fetches live jobs from LinkedIn · Indeed · Glassdoor and ranks them by
-    <strong>semantic similarity</strong> to your resume using BGE-small embeddings.<br>
-    <span style="font-size:0.85rem;">Match % = cosine similarity between your resume vector and each job description vector.</span>
-  </p>
-</div>
-""", unsafe_allow_html=True)
-
-        # ── Search form ───────────────────────────────────────────────────────
-        _jm_col1, _jm_col2, _jm_col3 = st.columns([3, 2, 1])
-        with _jm_col1:
-            _jm_query = st.text_input(
-                "Role / Keywords",
-                value=st.session_state.job_match_query or target_role,
-                placeholder="e.g. Machine Learning Engineer, Backend SDE",
-                key="jm_query_input",
-            )
-        with _jm_col2:
-            _jm_location = st.selectbox(
-                "Location",
-                ["India", "Bangalore", "Mumbai", "Delhi NCR", "Hyderabad",
-                 "Pune", "Chennai", "Noida", "Gurgaon", "Remote"],
-                key="jm_location",
-            )
-        with _jm_col3:
-            _jm_type = st.selectbox(
-                "Type",
-                ["FULLTIME", "INTERN", "PARTTIME", "CONTRACTOR"],
-                key="jm_emp_type",
-            )
-
-        _jm_n = st.slider("Number of jobs to fetch", 5, 10, 7, key="jm_n_jobs")
-
-        if st.button("🔍  Find & Match Jobs", type="primary", use_container_width=True, key="jm_search_btn"):
-            if not _jm_query.strip():
-                st.warning("Enter a role or keywords to search.")
-            else:
-                st.session_state.job_match_query = _jm_query.strip()
-                with st.spinner(f"Fetching jobs for **{_jm_query}** in {_jm_location}…"):
-                    try:
-                        from agents.job_search import search_jobs as _search_jobs
-                        _raw_jobs = _search_jobs(
-                            query=_jm_query.strip(),
-                            location=_jm_location,
-                            employment_type=_jm_type,
-                            num_results=_jm_n,
-                            rapidapi_key=st.session_state.rapidapi_key,
-                        )
-                    except Exception as _e:
-                        _err_str = str(_e)
-                        if "timed out" in _err_str.lower() or "timeout" in _err_str.lower():
-                            st.error("Request timed out — RapidAPI was slow. Try again in a few seconds.", icon="⏱️")
-                        else:
-                            st.error(f"Job search failed: {_e}")
-                        _raw_jobs = []
-
-                if _raw_jobs:
-                    with st.spinner("Embedding resumes and job descriptions — computing match scores…"):
-                        try:
-                            _matched = match_jobs_to_resume(
-                                st.session_state.resume_text,
-                                _raw_jobs,
-                                resume_embedding=st.session_state.resume_embedding,
-                            )
-                            st.session_state.job_match_results = _matched
-                        except Exception as _e:
-                            st.error(f"Matching failed: {_e}")
-                            st.session_state.job_match_results = []
-                else:
-                    st.session_state.job_match_results = []
-                    st.warning("No jobs found. Try broader keywords or a different location.")
-
-        # ── Results ───────────────────────────────────────────────────────────
-        _results = st.session_state.job_match_results
-        if _results:
-            st.markdown(
-                f'<p style="font-size:0.88rem;color:#8890a4;margin:0.5rem 0 1rem;">'
-                f'Showing {len(_results)} jobs · sorted by semantic match to your resume</p>',
-                unsafe_allow_html=True,
-            )
-
-            for _job in _results:
-                _score = _job.get("match_score", 0)
-
-                # Color badge by score band
-                if _score >= 65:
-                    _badge_bg, _badge_color, _bar_color = "#e8f5e9", "#1a7a45", "#27ae60"
-                elif _score >= 45:
-                    _badge_bg, _badge_color, _bar_color = "#fff8e1", "#a05800", "#f39c12"
-                else:
-                    _badge_bg, _badge_color, _bar_color = "#fdecea", "#922b21", "#e74c3c"
-
-                _bar_w = max(4, _score)
-
-                with st.container():
-                    st.markdown(
-                        f"""
-<div style="background:white;border:1px solid #e0e4f0;border-radius:10px;
-            padding:16px 18px 12px;margin-bottom:12px;
-            box-shadow:0 1px 6px rgba(0,0,0,0.05);">
-  <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;">
-    <div style="flex:1;min-width:0;">
-      <p style="font-size:1rem;font-weight:700;color:#1a1a2e;margin:0 0 2px;">
-        {_job.get('title','N/A')}
-      </p>
-      <p style="font-size:0.85rem;color:#4a4e6a;margin:0 0 6px;">
-        {_job.get('company','N/A')} &nbsp;·&nbsp; {_job.get('location','N/A')}
-        &nbsp;·&nbsp; {_job.get('type','N/A')}
-        &nbsp;·&nbsp; <span style="color:#8890a4;">{_job.get('source','')}</span>
-        &nbsp;·&nbsp; <span style="color:#8890a4;">Posted {_job.get('posted','')}</span>
-      </p>
-      <p style="font-size:0.82rem;color:#555;margin:0;line-height:1.55;">
-        {(_job.get('snippet') or '')[:200]}{"…" if len(_job.get('snippet') or '') > 200 else ""}
-      </p>
-    </div>
-    <div style="text-align:center;min-width:70px;">
-      <div style="background:{_badge_bg};border-radius:8px;padding:8px 10px;">
-        <p style="font-size:1.5rem;font-weight:800;color:{_badge_color};margin:0;line-height:1;">
-          {_score}%
-        </p>
-        <p style="font-size:0.65rem;font-weight:600;color:{_badge_color};margin:0;
-                  text-transform:uppercase;letter-spacing:0.05em;">match</p>
-      </div>
-    </div>
-  </div>
-  <div style="margin:10px 0 0;background:#eef0f7;border-radius:4px;height:5px;">
-    <div style="background:{_bar_color};width:{_bar_w}%;height:5px;border-radius:4px;"></div>
-  </div>
-</div>""",
-                        unsafe_allow_html=True,
-                    )
-
-                    # Action buttons in columns
-                    _btn1, _btn2, _btn3 = st.columns([2, 2, 3])
-                    with _btn1:
-                        if st.button(
-                            "📊 Analyze ATS",
-                            key=f"jm_ats_{_job.get('apply_link','')[:40]}",
-                            use_container_width=True,
-                        ):
-                            st.session_state.jd_text = _job.get("description") or _job.get("snippet") or ""
-                            st.toast("JD loaded — open the ATS Score tab", icon="📊")
-
-                    with _btn2:
-                        if st.button(
-                            "✍️ Tailor Resume",
-                            key=f"jm_tailor_{_job.get('apply_link','')[:40]}",
-                            use_container_width=True,
-                        ):
-                            st.session_state.jd_text = _job.get("description") or _job.get("snippet") or ""
-                            st.toast("JD loaded — open the JD Tailor tab", icon="✍️")
-
-                    with _btn3:
-                        _apply = _job.get("apply_link", "")
-                        if _apply:
-                            st.link_button(
-                                "🔗 Apply Now",
-                                url=_apply,
-                                use_container_width=True,
-                            )
+with _tab_jobs:
+    tab_jobs_mod.render(target_role, rapidapi_key=st.session_state.rapidapi_key)
