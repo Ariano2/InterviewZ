@@ -22,6 +22,7 @@ from agents.github_publisher import request_device_code, poll_for_token, get_git
 from agents.interview_prep import generate_qna
 from agents.upskill import recommend_skills, generate_learning_plan, yt_search_url
 from agents.resume_maker import enhance_bullets, generate_summary as generate_maker_summary, render_resume_html
+from agents.job_matcher import match_jobs_to_resume
 from rag.ingest import ingest_resume
 from utils.file_parser import parse_uploaded_file
 
@@ -35,10 +36,17 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Inject CSS from external file ────────────────────────────────────────────────
+# ── Inject CSS from external file (cached so disk is read once per server start) ─
 _css_path = os.path.join(os.path.dirname(__file__), "styles.css")
-with open(_css_path) as f:
-    st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+
+
+@st.cache_data
+def _load_css(path: str) -> str:
+    with open(path) as f:
+        return f.read()
+
+
+st.markdown(f"<style>{_load_css(_css_path)}</style>", unsafe_allow_html=True)
 
 # ── Session state ─────────────────────────────────────────────────────────────────
 _DEFAULTS = {
@@ -97,6 +105,11 @@ _DEFAULTS = {
         "achievements": "",
     },
     "maker_pdf_bytes": None,
+    # ── Semantic Job Matching ─────────────────────────────────────────────────
+    "job_match_results": [],     # List[Dict] — jobs with match_score added
+    "job_match_query": "",       # last search query
+    # ── Cached resume embedding (computed once on upload, reused across features) ─
+    "resume_embedding": None,    # numpy array shape (384,) from BGE-small
 }
 for k, v in _DEFAULTS.items():
     st.session_state.setdefault(k, v)
@@ -360,6 +373,7 @@ if uploaded_file and uploaded_file.name != st.session_state.loaded_filename:
         "upskill_recommended": None,
         "upskill_plan": None,
         "upskill_selected_skill": "",
+        "resume_embedding": None,   # cleared; recomputed below
     })
 
     with st.spinner("🗂️ Building RAG index…"):
@@ -406,14 +420,24 @@ if uploaded_file and uploaded_file.name != st.session_state.loaded_filename:
             except Exception as _e:
                 st.warning(f"PCA computation failed: {_e}")
 
+        # ── Step 3: Pre-compute resume embedding (reused by ATS + Job Match) ───
+        try:
+            import numpy as np
+            from utils.embed_cache import get_bge_model as _get_bge
+            st.session_state.resume_embedding = _get_bge().encode(
+                text[:4000], normalize_embeddings=True, show_progress_bar=False
+            )
+        except Exception:
+            pass   # non-fatal — features fall back to encoding on demand
+
         st.success(f"✓ **{uploaded_file.name}** parsed & indexed", icon="🗂️")
         st.rerun()
 
 st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────────
-tab_ats, tab_bullets, tab_jd, tab_chat, tab_portfolio, tab_interview, tab_raw, tab_maker = st.tabs([
-    "🏆  ATS Score", "✍️  Bullet Rewriter", "🎯  JD Tailor", "💬  Resume Chat", "🌐  Portfolio", "🎓  Interview Prep", "📄  Raw Text", "🛠️  Make My Resume"
+tab_ats, tab_bullets, tab_jd, tab_chat, tab_portfolio, tab_interview, tab_raw, tab_maker, tab_jobs = st.tabs([
+    "🏆  ATS Score", "✍️  Bullet Rewriter", "🎯  JD Tailor", "💬  Resume Chat", "🌐  Portfolio", "🎓  Interview Prep", "📄  Raw Text", "🛠️  Make My Resume", "🔍  Job Match"
 ])
 
 # ─────────────────────────────────────────────────────────────────────────────────
@@ -457,6 +481,7 @@ with tab_ats:
                         st.session_state.groq_client,
                         jd_text=st.session_state.jd_text,
                         model=st.session_state.groq_model,
+                        resume_embedding=st.session_state.resume_embedding,
                     )
 
                 if st.session_state.jd_text.strip() and st.session_state.ats_result:
@@ -499,6 +524,7 @@ with tab_ats:
                                 st.session_state.groq_client,
                                 jd_text=st.session_state.jd_text,
                                 model=_m1_id,
+                                resume_embedding=st.session_state.resume_embedding,
                             )
                             _r2 = analyze_ats(
                                 st.session_state.resume_text,
@@ -506,6 +532,7 @@ with tab_ats:
                                 st.session_state.groq_client,
                                 jd_text=st.session_state.jd_text,
                                 model=_m2_id,
+                                resume_embedding=st.session_state.resume_embedding,
                             )
 
                         _col1, _col2 = st.columns(2)
@@ -607,11 +634,11 @@ with tab_ats:
                 "action_verb_score", "section_score", "formatting_score",
             ]
             sub_scores = [
-                ("🔑 Keyword Match",    "wt 40%", r["keyword_score"],        prev_keys[0]),
-                ("📊 Quantification",   "wt 25%", r["quantification_score"], prev_keys[1]),
-                ("⚡ Action Verbs",     "wt 15%", r["action_verb_score"],     prev_keys[2]),
+                ("🔑 Keyword Match",    "wt 50%", r["keyword_score"],        prev_keys[0]),
+                ("⚡ Action Verbs",     "wt 20%", r["action_verb_score"],     prev_keys[2]),
+                ("📊 Quantification",   "wt 15%", r["quantification_score"], prev_keys[1]),
                 ("📋 Sections",         "wt 10%", r["section_score"],         prev_keys[3]),
-                ("🧹 ATS Format",       "wt 10%", r["formatting_score"],      prev_keys[4]),
+                ("🧹 ATS Format",        "wt 5%", r["formatting_score"],      prev_keys[4]),
             ]
 
             # Row of metrics (st.metric handles delta natively — no raw HTML needed)
@@ -846,6 +873,27 @@ with tab_bullets:
 </div>
 """, unsafe_allow_html=True)
 
+        # Show ATS keyword context banner if ATS has already run with a JD
+        _ats_missing = (
+            (st.session_state.ats_result or {}).get("missing_keywords") or []
+            if st.session_state.ats_result and st.session_state.ats_result.get("used_jd")
+            else []
+        )
+        if _ats_missing:
+            _kw_chips = "".join(
+                f'<span class="chip chip-green">{k}</span>' for k in _ats_missing[:15]
+            )
+            st.markdown(
+                f'<div style="background:#e8f5e9;border:1px solid #a5d6a7;border-radius:8px;'
+                f'padding:10px 14px;margin-bottom:0.8rem;font-size:0.85rem;color:#1a7a45;">'
+                f'<strong>ATS mode active</strong> — rewriter will target these {len(_ats_missing)} '
+                f'missing keywords from your last ATS scan:<br><div class="chips" style="margin-top:6px;">'
+                f'{_kw_chips}</div>'
+                f'<span style="font-size:0.78rem;color:#4a7a5a;">Run ATS Score again after downloading '
+                f'the rewritten PDF to see your improved score.</span></div>',
+                unsafe_allow_html=True,
+            )
+
         if st.button("▶  Rewrite Bullets & Build PDF Resume", key="run_bullets"):
             if not st.session_state.groq_client:
                 st.error("Please provide a Groq API key first.")
@@ -857,6 +905,7 @@ with tab_bullets:
                         target_role,
                         st.session_state.groq_client,
                         model=st.session_state.groq_model,
+                        jd_keywords=_ats_missing or None,
                     )
                     st.session_state.bullets_result = pairs
 
@@ -1091,10 +1140,10 @@ with tab_chat:
     )
     st.markdown(f"""
 <div class="card-blue" style="margin-bottom:1rem;">
-  <div class="section-label">RAG-Powered Resume Chat</div>
+  <div class="section-label">Agentic Resume Chat</div>
   <p style="font-size:0.9rem;color:#3452c7;line-height:1.65;margin:0;">
-    Every answer is grounded in your actual resume via vector search.<br>
-    Try: <strong>"What are my strongest skills?"</strong> · <strong>"Suggest improvements for my projects section"</strong><br>
+    Every answer is grounded in your resume via RAG. The chat can also <strong>run tools on your behalf</strong> — just ask naturally.<br>
+    <strong>"What's my ATS score?"</strong> · <strong>"Rewrite my bullets"</strong> · <strong>"Tailor my resume for [paste JD]"</strong><br>
     <span style="font-size:0.85rem;">{_job_badge}</span>
   </p>
 </div>
@@ -1152,17 +1201,19 @@ with tab_chat:
         else:
             st.session_state.chat_history.append({"role": "user", "content": user_msg})
 
-            with st.spinner("Retrieving context & generating…"):
+            with st.spinner("Thinking… (may run a tool if needed)"):
                 reply, updated_summary, chunks = chat_with_resume(
                     user_message=user_msg,
                     chat_history=st.session_state.chat_history[:-1],
                     groq_client=st.session_state.groq_client,
+                    resume_text=st.session_state.resume_text or "",
                     target_role=target_role,
                     session_summary=st.session_state.session_summary,
                     rapidapi_key=st.session_state.rapidapi_key,
                     corpus=st.session_state.vectorstore,
                     access_token=st.session_state.supabase_access_token,
                     model=st.session_state.groq_model,
+                    resume_embedding=st.session_state.resume_embedding,
                 )
 
             # Store retrieved chunk metadata for sidebar highlight
@@ -2106,3 +2157,182 @@ with tab_maker:
                 mime="application/pdf",
                 use_container_width=True,
             )
+
+# ─────────────────────────────────────────────────────────────────────────────────
+# TAB 9 — Semantic Job Matching
+# Fetches live jobs via JSearch, embeds JDs + resume with BGE-small,
+# ranks by cosine similarity, shows match % cards.
+# ─────────────────────────────────────────────────────────────────────────────────
+with tab_jobs:
+    if not st.session_state.resume_text:
+        st.info("Upload a resume above to enable semantic job matching.", icon="👆")
+    elif not st.session_state.rapidapi_key:
+        st.warning(
+            "Add `RAPIDAPI_KEY` to your `.env` file to enable live job search. "
+            "Get a free key at rapidapi.com → subscribe to JSearch.",
+            icon="🔑",
+        )
+    else:
+        st.markdown("""
+<div class="card-blue" style="margin-bottom:1rem;">
+  <div class="section-label">🔍 Semantic Job Matching</div>
+  <p style="font-size:0.9rem;color:#3452c7;line-height:1.65;margin:0;">
+    Fetches live jobs from LinkedIn · Indeed · Glassdoor and ranks them by
+    <strong>semantic similarity</strong> to your resume using BGE-small embeddings.<br>
+    <span style="font-size:0.85rem;">Match % = cosine similarity between your resume vector and each job description vector.</span>
+  </p>
+</div>
+""", unsafe_allow_html=True)
+
+        # ── Search form ───────────────────────────────────────────────────────
+        _jm_col1, _jm_col2, _jm_col3 = st.columns([3, 2, 1])
+        with _jm_col1:
+            _jm_query = st.text_input(
+                "Role / Keywords",
+                value=st.session_state.job_match_query or target_role,
+                placeholder="e.g. Machine Learning Engineer, Backend SDE",
+                key="jm_query_input",
+            )
+        with _jm_col2:
+            _jm_location = st.selectbox(
+                "Location",
+                ["India", "Bangalore", "Mumbai", "Delhi NCR", "Hyderabad",
+                 "Pune", "Chennai", "Noida", "Gurgaon", "Remote"],
+                key="jm_location",
+            )
+        with _jm_col3:
+            _jm_type = st.selectbox(
+                "Type",
+                ["FULLTIME", "INTERN", "PARTTIME", "CONTRACTOR"],
+                key="jm_emp_type",
+            )
+
+        _jm_n = st.slider("Number of jobs to fetch", 5, 10, 7, key="jm_n_jobs")
+
+        if st.button("🔍  Find & Match Jobs", type="primary", use_container_width=True, key="jm_search_btn"):
+            if not _jm_query.strip():
+                st.warning("Enter a role or keywords to search.")
+            else:
+                st.session_state.job_match_query = _jm_query.strip()
+                with st.spinner(f"Fetching jobs for **{_jm_query}** in {_jm_location}…"):
+                    try:
+                        from agents.job_search import search_jobs as _search_jobs
+                        _raw_jobs = _search_jobs(
+                            query=_jm_query.strip(),
+                            location=_jm_location,
+                            employment_type=_jm_type,
+                            num_results=_jm_n,
+                            rapidapi_key=st.session_state.rapidapi_key,
+                        )
+                    except Exception as _e:
+                        _err_str = str(_e)
+                        if "timed out" in _err_str.lower() or "timeout" in _err_str.lower():
+                            st.error("Request timed out — RapidAPI was slow. Try again in a few seconds.", icon="⏱️")
+                        else:
+                            st.error(f"Job search failed: {_e}")
+                        _raw_jobs = []
+
+                if _raw_jobs:
+                    with st.spinner("Embedding resumes and job descriptions — computing match scores…"):
+                        try:
+                            _matched = match_jobs_to_resume(
+                                st.session_state.resume_text,
+                                _raw_jobs,
+                                resume_embedding=st.session_state.resume_embedding,
+                            )
+                            st.session_state.job_match_results = _matched
+                        except Exception as _e:
+                            st.error(f"Matching failed: {_e}")
+                            st.session_state.job_match_results = []
+                else:
+                    st.session_state.job_match_results = []
+                    st.warning("No jobs found. Try broader keywords or a different location.")
+
+        # ── Results ───────────────────────────────────────────────────────────
+        _results = st.session_state.job_match_results
+        if _results:
+            st.markdown(
+                f'<p style="font-size:0.88rem;color:#8890a4;margin:0.5rem 0 1rem;">'
+                f'Showing {len(_results)} jobs · sorted by semantic match to your resume</p>',
+                unsafe_allow_html=True,
+            )
+
+            for _job in _results:
+                _score = _job.get("match_score", 0)
+
+                # Color badge by score band
+                if _score >= 65:
+                    _badge_bg, _badge_color, _bar_color = "#e8f5e9", "#1a7a45", "#27ae60"
+                elif _score >= 45:
+                    _badge_bg, _badge_color, _bar_color = "#fff8e1", "#a05800", "#f39c12"
+                else:
+                    _badge_bg, _badge_color, _bar_color = "#fdecea", "#922b21", "#e74c3c"
+
+                _bar_w = max(4, _score)
+
+                with st.container():
+                    st.markdown(
+                        f"""
+<div style="background:white;border:1px solid #e0e4f0;border-radius:10px;
+            padding:16px 18px 12px;margin-bottom:12px;
+            box-shadow:0 1px 6px rgba(0,0,0,0.05);">
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;">
+    <div style="flex:1;min-width:0;">
+      <p style="font-size:1rem;font-weight:700;color:#1a1a2e;margin:0 0 2px;">
+        {_job.get('title','N/A')}
+      </p>
+      <p style="font-size:0.85rem;color:#4a4e6a;margin:0 0 6px;">
+        {_job.get('company','N/A')} &nbsp;·&nbsp; {_job.get('location','N/A')}
+        &nbsp;·&nbsp; {_job.get('type','N/A')}
+        &nbsp;·&nbsp; <span style="color:#8890a4;">{_job.get('source','')}</span>
+        &nbsp;·&nbsp; <span style="color:#8890a4;">Posted {_job.get('posted','')}</span>
+      </p>
+      <p style="font-size:0.82rem;color:#555;margin:0;line-height:1.55;">
+        {(_job.get('snippet') or '')[:200]}{"…" if len(_job.get('snippet') or '') > 200 else ""}
+      </p>
+    </div>
+    <div style="text-align:center;min-width:70px;">
+      <div style="background:{_badge_bg};border-radius:8px;padding:8px 10px;">
+        <p style="font-size:1.5rem;font-weight:800;color:{_badge_color};margin:0;line-height:1;">
+          {_score}%
+        </p>
+        <p style="font-size:0.65rem;font-weight:600;color:{_badge_color};margin:0;
+                  text-transform:uppercase;letter-spacing:0.05em;">match</p>
+      </div>
+    </div>
+  </div>
+  <div style="margin:10px 0 0;background:#eef0f7;border-radius:4px;height:5px;">
+    <div style="background:{_bar_color};width:{_bar_w}%;height:5px;border-radius:4px;"></div>
+  </div>
+</div>""",
+                        unsafe_allow_html=True,
+                    )
+
+                    # Action buttons in columns
+                    _btn1, _btn2, _btn3 = st.columns([2, 2, 3])
+                    with _btn1:
+                        if st.button(
+                            "📊 Analyze ATS",
+                            key=f"jm_ats_{_job.get('apply_link','')[:40]}",
+                            use_container_width=True,
+                        ):
+                            st.session_state.jd_text = _job.get("description") or _job.get("snippet") or ""
+                            st.toast("JD loaded — open the ATS Score tab", icon="📊")
+
+                    with _btn2:
+                        if st.button(
+                            "✍️ Tailor Resume",
+                            key=f"jm_tailor_{_job.get('apply_link','')[:40]}",
+                            use_container_width=True,
+                        ):
+                            st.session_state.jd_text = _job.get("description") or _job.get("snippet") or ""
+                            st.toast("JD loaded — open the JD Tailor tab", icon="✍️")
+
+                    with _btn3:
+                        _apply = _job.get("apply_link", "")
+                        if _apply:
+                            st.link_button(
+                                "🔗 Apply Now",
+                                url=_apply,
+                                use_container_width=True,
+                            )

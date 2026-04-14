@@ -8,7 +8,7 @@ from typing import List, Dict
 
 JSEARCH_HOST  = "jsearch.p.rapidapi.com"
 JSEARCH_URL   = "https://jsearch.p.rapidapi.com/search"
-REQUEST_TIMEOUT = 10
+REQUEST_TIMEOUT = 25
 
 
 def search_jobs(
@@ -52,6 +52,7 @@ def search_jobs(
             "source":      job.get("job_publisher", "N/A"),
             "posted":      (job.get("job_posted_at_datetime_utc") or "")[:10],
             "apply_link":  job.get("job_apply_link", ""),
+            "description": (job.get("job_description") or "")[:1500].strip(),
             "snippet":     (job.get("job_description") or "")[:250].strip(),
         })
 

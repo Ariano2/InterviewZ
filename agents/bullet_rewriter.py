@@ -13,10 +13,21 @@ GROQ_MODEL = "openai/gpt-oss-120b"
 MAX_RESUME_CHARS = 7500
 
 
-def rewrite_bullets(resume_text: str, target_role: str, client: Groq, model: str = GROQ_MODEL) -> List[Dict]:
+def rewrite_bullets(
+    resume_text: str,
+    target_role: str,
+    client: Groq,
+    model: str = GROQ_MODEL,
+    jd_keywords: List[str] = None,
+) -> List[Dict]:
     """
     Identifies weak bullets and rewrites them.
-    Returns list of dicts: [{original, improved, why}, ...]
+
+    jd_keywords: optional list of keywords the ATS flagged as missing.
+    When provided, the rewriter naturally weaves them into rewrites where
+    the underlying work genuinely supports it — directly improving ATS score.
+
+    Returns list of dicts: [{action, original, improved, why}, ...]
     Returns an empty list on failure.
     """
     role_context = (
@@ -24,6 +35,17 @@ def rewrite_bullets(resume_text: str, target_role: str, client: Groq, model: str
         if target_role.strip()
         else "Target role not specified — make improvements generally strong and ATS-friendly for India."
     )
+
+    if jd_keywords:
+        kw_block = (
+            "\nATS KEYWORD BOOST — these keywords are missing from the resume and needed for the target role:\n"
+            + ", ".join(f'"{k}"' for k in jd_keywords[:20])
+            + "\nWhen rewriting a bullet, if the underlying work genuinely relates to one of these keywords, "
+            "weave it in naturally. Do NOT force keywords into unrelated bullets. "
+            "Prioritise bullets where a keyword fits — they will directly raise the ATS score.\n"
+        )
+    else:
+        kw_block = ""
 
     prompt = f"""You are an expert Indian resume coach helping candidates land better roles across all fields.
 
@@ -33,7 +55,7 @@ Resume:
 \"\"\"
 
 {role_context}
-
+{kw_block}
 Task:
 Scan every bullet point / description line in the resume. For each one decide:
 
@@ -51,6 +73,7 @@ B) REWRITE — if the bullet has real underlying content but is written weakly:
    - PAR / STAR: context + action + result / impact
    - Quantify wherever possible; if absent, add conservative realistic estimates marked ~
    - Natural field-relevant keywords — never force tech keywords into non-tech bullets
+   - If an ATS keyword fits naturally into this bullet's context, include it
    - 1–2 lines max
 
 C) KEEP — strong bullets that are already good. Do NOT include these in the output at all.

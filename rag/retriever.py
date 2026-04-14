@@ -57,13 +57,20 @@ def _quiet():
             yield
 
 
+_EMBED_MODEL_CACHE: HuggingFaceEmbeddings | None = None
+
+
 def _get_embeddings() -> HuggingFaceEmbeddings:
-    with _quiet():
-        return HuggingFaceEmbeddings(
-            model_name=EMBED_MODEL_NAME,
-            model_kwargs={"device": "cpu"},
-            encode_kwargs={"normalize_embeddings": True},
-        )
+    """Returns a cached HuggingFaceEmbeddings instance — loads once per process."""
+    global _EMBED_MODEL_CACHE
+    if _EMBED_MODEL_CACHE is None:
+        with _quiet():
+            _EMBED_MODEL_CACHE = HuggingFaceEmbeddings(
+                model_name=EMBED_MODEL_NAME,
+                model_kwargs={"device": "cpu"},
+                encode_kwargs={"normalize_embeddings": True},
+            )
+    return _EMBED_MODEL_CACHE
 
 
 def _get_supabase(access_token: str) -> Client:

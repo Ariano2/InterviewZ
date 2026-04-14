@@ -3,12 +3,19 @@ agents/ats_analyzer.py
 Rubric-based ATS analysis. Score is computed from weighted sub-scores,
 not guessed by the LLM. Supports optional JD text for precise keyword matching.
 
-Sub-score weights:
-  Keyword Match     40%  — computed: matched / total required keywords
-  Quantification    25%  — computed: bullets with numbers / total bullets
-  Action Verbs      15%  — LLM-rated
+Sub-score weights (industry-calibrated):
+  Keyword Match     50%  — computed: matched / total required keywords
+  Action Verbs      20%  — LLM-rated + programmatic fallback
+  Quantification    15%  — computed: bullets with numbers / total bullets
   Section Complete  10%  — computed: required sections present
-  ATS Formatting    10%  — LLM-rated
+  ATS Formatting     5%  — LLM-rated (less punishing for clean digital resumes)
+
+Rationale:
+  Real ATS systems (Taleo, Workday, iCIMS) are primarily keyword matchers —
+  keywords dominate. Action verbs are the first thing a human recruiter checks
+  after ATS pass. Quantification matters but shouldn't tank the score for roles
+  (research, design, teaching) where numbers are scarce. Formatting is less
+  critical for digitally-typed resumes that parse cleanly.
 """
 
 import json
@@ -19,26 +26,20 @@ from typing import TypedDict
 
 from groq import Groq
 
-# ── Sentence-transformer + KeyBERT models (lazy-loaded, cached across calls) ──
+# ── Shared BGE singleton + KeyBERT (lazy-loaded, process-level cache) ─────────
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-_EMBED_MODEL   = None
+
+# BGE model is now shared with job_matcher via utils.embed_cache — only ONE
+# SentenceTransformer instance per process (~130 MB saved vs. two copies).
+from utils.embed_cache import get_bge_model as _get_embed_model
+
 _KEYBERT_MODEL = None
-
-
-def _get_embed_model():
-    global _EMBED_MODEL
-    if _EMBED_MODEL is None:
-        warnings.filterwarnings("ignore")
-        from sentence_transformers import SentenceTransformer
-        _EMBED_MODEL = SentenceTransformer("BAAI/bge-small-en-v1.5")
-    return _EMBED_MODEL
 
 
 def _get_keybert():
     global _KEYBERT_MODEL
     if _KEYBERT_MODEL is None:
         from keybert import KeyBERT
-        # Reuse the already-loaded BGE model — no extra download
         _KEYBERT_MODEL = KeyBERT(model=_get_embed_model())
     return _KEYBERT_MODEL
 
@@ -70,7 +71,7 @@ def extract_keywords_keybert(text: str, top_n: int = 15) -> list:
         return []
 
 
-def compute_similarity_metrics(resume_text: str, jd_text: str) -> dict:
+def compute_similarity_metrics(resume_text: str, jd_text: str, resume_embedding=None) -> dict:
     """
     Encodes resume and JD with all-MiniLM-L6-v2 and computes four metrics.
 
@@ -103,8 +104,9 @@ def compute_similarity_metrics(resume_text: str, jd_text: str) -> dict:
         from sentence_transformers import util
 
         model = _get_embed_model()
-        a = model.encode(resume_text[:4000], normalize_embeddings=True)  # shape (384,)
-        b = model.encode(jd_text[:4000],     normalize_embeddings=True)
+        # Use pre-computed resume embedding if available (avoids re-encoding same text)
+        a = resume_embedding if resume_embedding is not None else model.encode(resume_text[:4000], normalize_embeddings=True)
+        b = model.encode(jd_text[:4000], normalize_embeddings=True)
 
         # Cosine (dot product on unit vectors)
         cosine = float(np.clip(np.dot(a, b), 0.0, 1.0))
@@ -138,11 +140,11 @@ MAX_RESUME_CHARS = 7000
 MAX_JD_CHARS = 4000
 
 WEIGHTS = {
-    "keyword":        0.40,
-    "quantification": 0.25,
-    "action_verb":    0.15,
+    "keyword":        0.50,
+    "action_verb":    0.20,
+    "quantification": 0.15,
     "sections":       0.10,
-    "formatting":     0.10,
+    "formatting":     0.05,
 }
 
 STRONG_VERBS = {
@@ -391,6 +393,7 @@ def analyze_ats(
     client: Groq,
     jd_text: str = "",
     model: str = GROQ_MODEL,
+    resume_embedding=None,
 ) -> ATSResult:
     """
     Rubric-based ATS analysis.
@@ -400,7 +403,7 @@ def analyze_ats(
     try:
         # Step 1 — Model: embedding-based similarity metrics (no LLM involved)
         if jd_text.strip():
-            sim_metrics    = compute_similarity_metrics(resume_text, jd_text)
+            sim_metrics    = compute_similarity_metrics(resume_text, jd_text, resume_embedding=resume_embedding)
             semantic_score = sim_metrics.get("cosine", -1.0)
         else:
             sim_metrics    = {}
@@ -431,8 +434,8 @@ def analyze_ats(
         # Step 5 — Weighted final score
         final = round(
             WEIGHTS["keyword"]        * kw_pct        +
-            WEIGHTS["quantification"] * quant_score   +
             WEIGHTS["action_verb"]    * action_score  +
+            WEIGHTS["quantification"] * quant_score   +
             WEIGHTS["sections"]       * section_score +
             WEIGHTS["formatting"]     * fmt_score
         )
